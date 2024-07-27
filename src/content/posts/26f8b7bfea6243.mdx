@@ -1,0 +1,240 @@
+---
+title: "aws-cdkを使ってs3+cloudfrontの静的サイトホスティングを作る"
+emoji: "💬"
+type: "tech"
+tags:
+  - "AWS"
+  - "TypeScript"
+published: true
+published_at: "2023-06-04 13:34"
+---
+
+# はじめに
+
+aws-cli が使えるようにしておきます
+
+```bash:aws-cliのインストール
+brew install awscli # aws-cliのインストール
+aws --version　# インストールされたことの確認
+```
+
+`aws configure`で profile の設定をしておきます
+
+```bash:awsのprofileの設定
+aws configure # default　というprofile名で作成
+# もしくは aws configure --profile user1　などでdefault以外のprofile名で作成してもよい
+
+# 以下の項目が聞かれるので、埋める
+AWS Access Key ID [None]: {アクセスキー(各自)}
+AWS Secret Access Key [None]: {シークレットアクセスキー(各自)}
+Default region name [None]: ap-northeast-1
+Default output format [None]: json (または yaml, text など)
+```
+
+```bash:awsコマンドを打ってみる
+aws sts get-caller-identity # 呼び出した人のアカウントなどを取得
+# profileを指定する場合は aws sts get-caller-identity --profile user1　などとする
+
+aws configure list # default profileの設定を確認
+aws　iam list-users # IAMユーザーの一覧を確認
+```
+
+https://qiita.com/reflet/items/e4225435fe692663b705
+
+https://docs.aws.amazon.com/ja_jp/cli/latest/userguide/cli-usage-output-format.html
+
+# 作っていく
+
+## 前提
+
+- 言語は typescript で行います
+- エディタは vscode を使います
+- node: 18.13.0(20 系だと aws-cdk がまだ対応してないみたいな警告が出たので 18 でやってみます)
+- npm: 8.19.3
+
+## ディレクトリ作成
+
+```bash:ディレクトリ作成
+mkdir zenn-cdk
+cd zenn-cdk
+git init
+cd cdk
+npx cdk init app --language typescript
+```
+
+```bash: ディレクトリ構成
+$ tree -aL 2
+.
+├── .git
+│   ├── HEAD
+│   ├── config
+│   ├── description
+│   ├── hooks
+│   ├── info
+│   ├── objects
+│   └── refs
+├── .vscode
+│   ├── extensions.json
+│   └── settings.json
+└── cdk
+    ├── .gitignore
+    ├── .npmignore
+    ├── README.md
+    ├── bin
+    ├── cdk.json
+    ├── jest.config.js
+    ├── lib
+    ├── node_modules
+    ├── package-lock.json
+    ├── package.json
+    ├── test
+    └── tsconfig.json
+```
+
+## vscode の設定(飛ばしても OK)
+
+個人の趣向なので、適当にカスタムしてください
+
+```json:.vscode/extensions.json
+{
+  "recommendations": [
+    "esbenp.prettier-vscode", // typescriptをフォーマットする
+    "amazonwebservices.aws-toolkit-vscode", // vscode上でawsリソースを確認したりできる
+  ]
+}
+```
+
+```json:.vscode/settings.json
+{
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": true,
+    "editor.tabSize": 2,
+}
+```
+
+```json:.prettierrc
+{
+  "trailingComma": "all",
+  "tabWidth": 2,
+  "singleQuote": true,
+  "semi": true
+}
+```
+
+## cdk bootstrap
+
+```bash:cdk-bootstrap
+npx cdk bootstrap # default profileで設定
+# もしくは cdk bootstrap aws://XXXXXXXX/ap-northeast-1 --profile cm-wada など
+```
+
+## s3 と cloudfront を作る
+
+```ts:lib/cdk-stack.ts
+import * as cdk from 'aws-cdk-lib';
+import { Construct } from 'constructs';
+
+export class CdkStack extends cdk.Stack {
+  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+    super(scope, id, props);
+
+    // 静的サイトホスティング用のバケットを作成
+    const bucket = new cdk.aws_s3.Bucket(this, 'ZennCdkTestBucket', {
+      bucketName: 'zenn-cdk-test-bucket',
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // スタック削除時(npx cdk destroy実行時)にバケットも削除(ただし、s3の中身を空にしておかないとエラーになる)
+    });
+
+    // cloudfront用のoriginAccessIdentityを作成
+    const originAccessIdentity = new cdk.aws_cloudfront.OriginAccessIdentity(
+      this,
+      'OriginAccessIdentity',
+      {
+        comment: 'OriginAccessIdentityForStaticSiteHostingBucket',
+      },
+    );
+
+    // bucket policyを作成
+    const bucketPolicy = new cdk.aws_iam.PolicyStatement({
+      actions: ['s3:GetObject'], // GetObjectのみ許可
+      resources: [`${bucket.bucketArn}/*`], // バケット内の全てのオブジェクトを対象
+      // originAccessIdentityから(CloudFront経由でのアクセス)のみを許可
+      principals: [
+        new cdk.aws_iam.CanonicalUserPrincipal(
+          originAccessIdentity.cloudFrontOriginAccessIdentityS3CanonicalUserId,
+        ),
+      ],
+    });
+
+    // bucketにpolicyを追加
+    bucket.addToResourcePolicy(bucketPolicy);
+
+    // cloudfrontの設定
+    const distribution = new cdk.aws_cloudfront.Distribution(
+      this,
+      'distribution',
+      {
+        comment: 'DistributionForStaticSiteHostingBucket',
+        defaultRootObject: 'index.html', // index.htmlをデフォルトルートに設定
+        defaultBehavior: {
+          compress: true, // 圧縮を有効化
+          viewerProtocolPolicy:
+            cdk.aws_cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS, // httpからのアクセスをhttpsにリダイレクト
+          allowedMethods: cdk.aws_cloudfront.AllowedMethods.ALLOW_GET_HEAD, // GETとHEADのみ許可
+          origin: new cdk.aws_cloudfront_origins.S3Origin(bucket, {
+            originAccessIdentity,
+          }),
+        },
+      },
+    );
+
+    // s3にデプロイ
+    new cdk.aws_s3_deployment.BucketDeployment(this, 'BucketDeployment', {
+      destinationBucket: bucket,
+      distribution,
+      sources: [
+        cdk.aws_s3_deployment.Source.data(
+          '/index.html',
+          '<html><body><h1>Hello, World!</h1></body></html>',
+        ),
+      ],
+    });
+
+    // cloudfrontのURLを出力
+    // CfnOutputはcdkのスタックをデプロイした後に出力される値を出力する時に使う
+    // 参考: https://zenn.dev/winteryukky/articles/5e5353ae72ab5c
+    new cdk.CfnOutput(this, 'URL', {
+      value: `https://${distribution.distributionDomainName}`,
+    });
+  }
+}
+```
+
+https://zenn.dev/winteryukky/articles/5e5353ae72ab5c
+
+https://dev.classmethod.jp/articles/aws-cdk-s3-delete-policy/
+
+## デプロイ
+
+```bash:デプロイ
+npm run build # tscが実行される, 念の為コンパイルが通ることを確認
+# 本当はjestでテスト書いて、npm testが通ること確認とかしたい
+
+npx cdk synth # CDKのコードからCFnのテンプレートが生成される
+# デプロイ前にvscodeのaws toolkitとかでstackの内容を確認しておくのもおすすめ
+
+npx cdk deploy # デプロイコマンド
+
+# Outputs:
+# CdkStack.URL = https://hogehoge.cloudfront.net
+```
+
+url にアクセスして Hello world!と出たら OK です
+s3 の index.html に直アクセスができないことから OAI も効いていることを確かめます
+さらに、cloudformation にアクセスして、stack ができていることを確かめるとより勉強になるかもしれません
+
+## お片付け
+
+- s3 の中身を空にする
+- `npx cdk destroy`
+- cloudformation で stack がきえていることを確認する
+- URL にアクセスできないことを確認する

@@ -1,0 +1,421 @@
+---
+title: "LaravelとNext.jsでpaginationを実装する"
+emoji: "🐥"
+type: "tech"
+tags:
+  - "Laravel"
+  - "Next.js"
+  - "PHP"
+  - "TypeScript"
+published: true
+published_at: "2023-01-07 20:34"
+---
+
+# 前提
+
+記事(Post)を投稿できるような SNS サイトを考える。
+フロントは Next.js、バックエンドは Laravel で実装されている。
+
+記事(Post)に対してページネーションを実装したい、つまり 10 件とかの塊でデータを分けて、ページごとにそれを表示する感じのやりとりを API を介して実装したい。
+
+```php:app/Models/User.php
+<?php
+
+namespace App\Models;
+
+// use Illuminate\Contracts\Auth\MustVerifyEmail;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Notifications\Notifiable;
+use Laravel\Sanctum\HasApiTokens;
+
+class User extends Authenticatable
+{
+    use HasApiTokens, HasFactory, Notifiable;
+
+    /**
+     * The attributes that are mass assignable.
+     *
+     * @var array<int, string>
+     */
+    protected $fillable = [
+        'name',
+        'email',
+        'password',
+    ];
+
+    /**
+     * The attributes that should be hidden for serialization.
+     *
+     * @var array<int, string>
+     */
+    protected $hidden = [
+        'password',
+        'remember_token',
+    ];
+
+    /**
+     * The attributes that should be cast.
+     *
+     * @var array<string, string>
+     */
+    protected $casts = [
+        'email_verified_at' => 'datetime',
+    ];
+
+    public function posts()
+    {
+        return $this->hasMany(Post::class);
+    }
+}
+```
+
+```php:app/Models/Post.php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+class Post extends Model
+{
+    use HasFactory;
+
+    public function user()
+    {
+        return $this->belongsTo(User::class);
+    }
+}
+```
+
+```php:app/Http/Controllers/PostController.php
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Http\Resources\PostResource;
+use App\Http\Usecases\Post\IndexAction;
+use App\Models\Post;
+
+class PostController extends Controller
+{
+    /**
+     * Display a listing of the resource.
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function index(IndexAction $action)
+    {
+        return PostResource::collection($action());
+    }
+}
+```
+
+```php:app/Resources/PostResource.php
+<?php
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class PostResource extends JsonResource
+{
+  public function toArray($request): array
+  {
+    parent::withoutWrapping();
+    assert($this->resource->relationLoaded('user'));
+
+    return [
+      'id' => $this->resource->id,
+      'title' => $this->resource->title,
+      'content' => $this->resource->content,
+      'author' => $this->resource->user->name,
+      'imageUrl' => $this->resource->user->imageUrl,
+      'created_at' => $this->resource->created_at,
+      'updated_at' => $this->resource->updated_at
+    ];
+  }
+}
+```
+
+```php:app/Http/Usecases/Post/IndexAction.php
+<?php
+
+namespace App\Http\Usecases\Post;
+
+use App\Models\Post;
+
+class IndexAction
+{
+  public function __invoke()
+  {
+    return Post::with('user:id,name') // userモデルから取得するカラムをid、nameに制限する
+      ->paginate(10); // 1ページ内の量は10個
+  }
+}
+```
+
+# レスポンスの形(インターフェース)に注意する
+
+`PostController`と`PostResource`は以下のようになっていた。
+
+```php:app/Http/Controllers/PostController.php
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Http\Resources\PostResource;
+use App\Http\Usecases\Post\IndexAction;
+use App\Models\Post;
+
+class PostController extends Controller
+{
+    /**
+     * Display a listing of the resource.
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function index(IndexAction $action)
+    {
+        // $action()の返り値をPostResourceの形に整形
+        return PostResource::collection($action());
+    }
+}
+```
+
+```php:app/Resources/PostResource.php
+<?php
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class PostResource extends JsonResource
+{
+  public function toArray($request): array
+  {
+    parent::withoutWrapping();
+
+    // PostResourceの形は以下のように定める(APIレスポンスのインターフェース)
+    return [
+      'id' => $this->resource->id,
+      'title' => $this->resource->title,
+      'content' => $this->resource->content,
+      'author' => $this->resource->user->name,
+      'imageUrl' => $this->resource->user->imageUrl,
+      'created_at' => $this->resource->created_at,
+      'updated_at' => $this->resource->updated_at
+    ];
+  }
+}
+```
+
+しかし、レスポンスは以下のようになる
+
+```json:レスポンス
+{
+  "data": [
+    {
+      // ここの1つ1つがPostResourceの形に整形される
+      "id": 11,
+      "title": "た叫さけんか。わたしたらこの下の向むこ。",
+      "content": "置おいのるようと、あらわれるようにかかり、黄いおうでが、まだ小さく遠く遠いもりのつい顔のやぶをまた何気なくなって立ってじっけて見分けてありが非常ひじょうのての」ジョバンニは、次つぎへとたべるような音が川の左の岸きしに行こうけんを出してそらの木といいえ、しばらの礫こいしょうどうした。二人ふたごのお宮みやだ。だまにもっとそろえているもんですって来るのを見てあの図よりは眼めをこらは白鳥の停車場ているのでした。ほんとうち、次つぎへとたべているんでした。（ああ、そのなかにあれ」睡ねむらされ汽車やその大きなりました。とこらのなかに赤い旗はたをあい悪わるがえて、家庭教師かていたり、カムパネルラが答えましたりましく泣なきだして二人ふたり、どうだいと叫さけびましていました。とこへ行くと同じいろの空から出て来るか、あなた方はガラスの鎖くさんが迎むかしの木がほんとした。そしてジョバンニは思わずかな銀河ぎんがを大きなり、大将たいだねえ」「ザウエルとても誰だれてカムパネルラが不思議ふしぎなんぞたべてにげたりのうしろに人のインデアンの塊かたいどこかそうに、「ああ、どうしていまにそう感じてんてんきり六十度どばかり。",
+      "author": "近藤 里佳",
+      "imageUrl": "https://via.placeholder.com/640x480.png/001100?text=a",
+      "created_at": "2023-01-07T08:48:22.000000Z",
+      "updated_at": "2023-01-07T08:48:22.000000Z"
+    },
+    {
+      "id": 12,
+      "title": "いねいに深ふかいのってじっと光りません。",
+      "content": "ょうへ行って、ただ眼めをカムパネルラは、指ゆびできました。いいました。あの汽車は降おりような声が聞こえたちや町の家々ではね、わあとだなのが水からここどもたれだんゆるやかに爆発ばくはそのまん中にかの花が、ジョバンニは手を振ふりますとみちを乗のって地球ちきゅうに急いそよりも見え、きれいな涙なみちがそのひとそろそろそうとしてやすみました。カムパネルラの行ったのでしたがたくをあけて死しぬったんそうだ」「それを見ました。その小さな青じろいろいはげしい力が湧わき、「ザネリがばっているかぐあい悪わるがわるがわかり、また鳥をとって歴史れきっとまりませんかくの青年が祈いのはらを光らしだったり、スコップではいていしょうへいたことも言いいないる。けれどもらは、だまってしませんろと青じろいの火は燃もえたふくをして、前の言いったよ。お前は夢ゆめをこすりへらさきの波なみだよ」「鶴つるでひるまのお母っから、その白い鳥の形になり、カムパネルラのお菓子かしのずうっとそうようなんべんも出たとき汽車は、お父さんの円光をいじょうだ、やさしているのです」「ああ、ぼんやりしても気持きも切れず膝ひざまのまって大きな蟹かになるなら。",
+      "author": "近藤 里佳",
+      "imageUrl": "https://via.placeholder.com/640x480.png/001100?text=a",
+      "created_at": "2023-01-07T08:48:22.000000Z",
+      "updated_at": "2023-01-07T08:48:22.000000Z"
+    }
+    // 省略
+  ],
+  // 以下はページネーションを実装するために必要な情報を自動で付与してくれる
+  "links": {
+    "first": "http://localhost/api/post?page=1",
+    "last": "http://localhost/api/post?page=10",
+    "prev": "http://localhost/api/post?page=1",
+    "next": "http://localhost/api/post?page=3"
+  },
+  "meta": {
+    "current_page": 2,
+    "from": 11,
+    "last_page": 10,
+    "links": [
+      {
+        "url": "http://localhost/api/post?page=1",
+        "label": "pagination.previous",
+        "active": false
+      },
+      {
+        "url": "http://localhost/api/post?page=1",
+        "label": "1",
+        "active": false
+      },
+      {
+        "url": "http://localhost/api/post?page=2",
+        "label": "2",
+        "active": true
+      },
+      {
+        "url": "http://localhost/api/post?page=3",
+        "label": "3",
+        "active": false
+      },
+      {
+        "url": "http://localhost/api/post?page=4",
+        "label": "4",
+        "active": false
+      },
+      {
+        "url": "http://localhost/api/post?page=5",
+        "label": "5",
+        "active": false
+      },
+      {
+        "url": "http://localhost/api/post?page=6",
+        "label": "6",
+        "active": false
+      },
+      {
+        "url": "http://localhost/api/post?page=7",
+        "label": "7",
+        "active": false
+      },
+      {
+        "url": "http://localhost/api/post?page=8",
+        "label": "8",
+        "active": false
+      },
+      {
+        "url": "http://localhost/api/post?page=9",
+        "label": "9",
+        "active": false
+      },
+      {
+        "url": "http://localhost/api/post?page=10",
+        "label": "10",
+        "active": false
+      },
+      {
+        "url": "http://localhost/api/post?page=3",
+        "label": "pagination.next",
+        "active": false
+      }
+    ],
+    "path": "http://localhost/api/post",
+    "per_page": 10,
+    "to": 20,
+    "total": 100
+  }
+}
+```
+
+つまり、**paginator を Resource に渡すと自動でページネーションを実装するのに必要な情報が付与される**
+
+これに関しては以下の記事が参考になる:
+
+https://zenn.dev/tekihei2317/articles/7bb54c6d5a340e
+
+# フロントエンド側で型を定義しておく
+
+フロント用で適当に以下のような型を定義しておくといい気がする
+
+```ts:types/dataWithPagination.ts
+export type DataWithPagination<T> = {
+  data: T; //　本体データの型をジェネリックスで渡す
+  // 以下はページネーションを実装するのに必要な情報たち
+  links: {
+    first: string;
+    last: string;
+    prev: string;
+    next: string;
+  };
+  meta: {
+    current_page: number;
+    last_page: number;
+    path: string; // apiのpath(http://example.com/api/postなど)
+    per_page: number;
+    from: number; // 何番目のデータから始まるか
+    to: number; // 何番目のデータまでか
+    total: number;
+    links: {
+      url: string;
+      label: string;
+      active: boolean;
+    }[];
+  };
+};
+```
+
+Post の型も適当に定義しておく
+
+```ts:types/post.ts
+export type Post = {
+  id: string;
+  title: string;
+  content: string;
+  author: string;
+  imageUrl: string;
+  created_at: string;
+  updated_at: string;
+};
+```
+
+# SWR を使ってデータフェッチとページネーションを楽に実装する
+
+SWR を使ってデータフェッチを行うと楽な気がする。
+SWR の fetcher には axios を使う。
+
+```ts:lib/axios.ts
+import Axios from 'axios'
+
+const axios = Axios.create({
+    baseURL: process.env.NEXT_PUBLIC_BACKEND_URL, // laravelのURL
+    headers: {
+        'X-Requested-With': 'XMLHttpRequest',
+    },
+    withCredentials: true,
+})
+
+export default axios
+```
+
+```ts:hooks/posts.ts
+import { DataWithPagination } from "../types/dataWithPagination";
+import axios from "@/lib/axios";
+import useSWR, { Fetcher } from "swr";
+import { Post } from "@/types/Post";
+
+// データはPost[]型 + ページネーションを実装するのに必要な情報の型
+type ReturnType = DataWithPagination<Post[]>;
+
+// pageを引数に受け取る(component側で渡す想定)
+export const usePosts = (page: number) => {
+  const fetcher: Fetcher<ReturnType, string> = async (url) => {
+    const res = await axios.get(url);
+    const data = await res.data;
+
+    return data;
+  };
+
+  const { data, error, isLoading } = useSWR(`/api/post?page=${page}`, fetcher);
+
+  return {
+    data,
+    error,
+    isLoading,
+  };
+};
+```
+
+SWR を用いたページネーションの実装については以下が参考になる:
+
+https://swr.vercel.app/ja/docs/pagination

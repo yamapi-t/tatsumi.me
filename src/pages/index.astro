@@ -1,0 +1,26 @@
+---
+import { getCollection } from "astro:content";
+import BaseLayout from "../layouts/BaseLayout.astro";
+import ArticleCard from "../components/ArticleCard.astro";
+
+const posts = await getCollection("posts").then((posts) =>
+  posts.sort((a, b) => {
+    return (
+      new Date(b.data.published_at).getTime() -
+      new Date(a.data.published_at).getTime()
+    );
+  })
+);
+---
+
+<BaseLayout title="ホーム">
+  <h2 class="font-semibold text-xl my-4">記事一覧</h2>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    {
+      posts.map((post) => {
+        return <ArticleCard post={post} />;
+      })
+    }
+  </div>
+</BaseLayout>

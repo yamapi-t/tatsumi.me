@@ -1,0 +1,9 @@
+{
+    "recommendations": [
+        "davidanson.vscode-markdownlint",
+        "zenn.zenn-preview",
+        "hashicorp.terraform",
+        "astro-build.astro-vscode",
+        "unifiedjs.vscode-mdx"
+    ]
+}

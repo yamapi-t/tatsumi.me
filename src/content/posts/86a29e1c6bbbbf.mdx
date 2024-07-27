@@ -1,0 +1,134 @@
+---
+title: "typescriptで特定のファイルからのauto importをしないようにしたい"
+emoji: "🦔"
+type: "tech"
+tags:
+  - "Next.js"
+  - "TypeScript"
+published: true
+published_at: "2023-04-05 11:44"
+---
+
+# はじめに
+
+server components(sc)と client components(cc)という機能が nextjs の`app`ディレクトリ内で使用できるようになりました。先日試していたときに、vscode の import のめんどくささがあったのでメモしておきます。より良い方法などあれば教えてください。
+
+# 結論
+
+vscode 前提です。
+**typescript のバージョンが 4.8 以上である必要があります**。
+
+```json:.vscode/settings.json
+{
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.preferences.autoImportFileExcludePatterns": [
+    // 除外したいものを書く
+  ]
+}
+```
+
+# 使用例的なもの
+
+app ディレクトリと UI フレームワーク、例えば[chakra ui](https://chakra-ui.com/)を組み合わせたいとします。
+とりあえず、`ChakraProvider`でルートコンポーネントを囲みたいんですが、以下のような感じだと動きません。
+
+```tsx:layout.tsx(動かない)
+import { ChakraProvider } from '@chakra-ui/react';
+
+export const metadata = {
+  title: 'Tatsumi Yamamoto',
+  description: 'yamamoto tatsumi dayo',
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang='ja'>
+      <head />
+      <ChakraProvider>
+        <body>{children}</body>
+      </ChakraProvider>
+    </html>
+  );
+}
+```
+
+理由は layout.tsx に`'use client';`がなく、sc では state などが使えないからです。ChakraProvider は内部で state とかを使っているのでエラーになります。
+
+そこで、`'use client';`を足して cc にしてみますが、これは良くないみたいです。
+
+> root layout はデフォルトで Server component であり、Client Component にすることはできません。
+> (The root layout is a Server Component by default and can not be set to a Client Component.)
+
+https://beta.nextjs.org/docs/routing/pages-and-layouts#root-layout-required
+
+```tsx:layout.tsx(ダメ)
+'use client';
+import { ChakraProvider } from '@chakra-ui/react';
+
+export const metadata = {
+  title: 'Tatsumi Yamamoto',
+  description: 'yamamoto tatsumi',
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang='ja'>
+      <head />
+      <ChakraProvider>
+        <body>{children}</body>
+      </ChakraProvider>
+    </html>
+  );
+}
+```
+
+そのため、以下のように一旦 cc から全てを export します。
+
+```tsx:chakraComponents.tsx
+'use client';
+
+export * from '@chakra-ui/react';
+```
+
+そして、chakra ui のコンポーネントを使うときはここから import するようにします。
+
+```tsx:layout.tsx
+import { ChakraProvider } from './chakraComponents';
+
+export const metadata = {
+  title: 'Tatsumi Yamamoto',
+  description: 'yamamoto tatsumi',
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang='ja'>
+      <head />
+      <ChakraProvider>
+        <body>{children}</body>
+      </ChakraProvider>
+    </html>
+  );
+}
+```
+
+このときに、`@chakra-ui/react`からは import したくないのですが、vscode では import の候補に出てしまうので、一旦以下のような記述で黙らせることができます。
+
+```json:.vscode/settings.json
+{
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.preferences.autoImportFileExcludePatterns": [
+    "node_modules/@chakra-ui"
+  ]
+}
+```
+
+`app`ディレクトリを本格的に使ったことがないので、もしかしたらこの設定で問題が出るかもしれませんし、ui フレームワーク側の何かしらの対応で解決するかもしれませんが、とりあえずメモです。
+
+# 参考
+
+https://github.com/chakra-ui/chakra-ui/issues/7209
+
+https://reffect.co.jp/react/next-js-13-app#i
+
+https://zenn.dev/azukiazusa/articles/next-js-app-dir-tutorial

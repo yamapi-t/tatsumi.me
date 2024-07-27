@@ -1,0 +1,72 @@
+---
+import Header from "../components/Header.astro";
+import { ViewTransitions } from "astro:transitions";
+
+type Props = {
+  title: string;
+  description?: string;
+};
+
+const { title, description } = Astro.props;
+
+const siteName = `${title} | tatsumiyamamoto.com`;
+const url = import.meta.env.SITE;
+---
+
+<html lang="ja">
+  <head>
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="generator" content={Astro.generator} />
+    <meta name="description" content={description} />
+
+    <meta property="og:title" content={siteName} />
+    <meta
+      property="og:description"
+      content={description ?? "web開発に関する技術を中心に紹介するブログです。"}
+    />
+    <meta property="og:locale" content="ja_JP" />
+    <meta property="og:type" content="website" />
+
+    <meta name="twitter:title" content={siteName} />
+    <meta name="twitter:description" content={description} />
+
+    <meta property="og:base_url" content={url} />
+
+    <title>{siteName}</title>
+
+    <script
+      is:inline
+      src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6828271479858719"
+      crossorigin="anonymous"></script>
+
+    <ViewTransitions />
+  </head>
+
+  <body
+    class="font-sans dark:bg-neutral-900 dark:text-neutral-100 bg-white text-neutral-800"
+  >
+    <div class="w-11/12 lg:w-2/3 mx-auto py-4">
+      <div class="mb-8">
+        <Header />
+      </div>
+
+      <slot />
+    </div>
+
+    <script is:inline>
+      const init = () => {
+        (window.adsbygoogle || []).push({});
+      };
+
+      init();
+
+      document.addEventListener("astro:after-swap", () => {
+        init();
+      });
+    </script>
+  </body>
+</html>

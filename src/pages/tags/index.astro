@@ -1,0 +1,24 @@
+---
+import { getCollection } from "astro:content";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+
+const posts = await getCollection("posts");
+const tags = [...new Set(posts.flatMap((post) => post.data.tags))];
+---
+
+<BaseLayout title="タグ">
+  <div class="flex gap-2">
+    {
+      tags.map((tag) => {
+        return (
+          <a
+            href={`/tags/${encodeURIComponent(tag)}`}
+            class="bg-neutral-100 dark:bg-neutral-600 text-neutral-900 dark:text-neutral-100 px-2 py-1 rounded-full text-xs"
+          >
+            {tag}
+          </a>
+        );
+      })
+    }
+  </div>
+</BaseLayout>

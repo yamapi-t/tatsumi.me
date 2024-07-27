@@ -1,0 +1,143 @@
+---
+title: "TypeScriptでmarkdownからHTMLを生成するCLIツールを作る"
+emoji: "⛳"
+type: "tech"
+tags:
+  - "HTML"
+  - "TypeScript"
+published: true
+published_at: "2023-02-05 20:54"
+---
+
+# はじめに
+
+最近以下の本を読みました。
+
+https://amzn.to/3H9vui8
+
+この本の中で、Node.js で md ファイルを HTML に変換する CLI ツールを作るパートがあったので、今回はそれを TypeScript で書いてみようと思います。
+
+# 準備
+
+```bash:準備
+mkdir cli_test
+cd cli_test
+npm init -y
+npm i yargs @types/yargs marked @types/marked ts-node @types/node
+npx tsc --init
+```
+
+```json:tsconfig.json
+...
+  "baseUrl": "./" // baseUrlだけ設定しておく(エラーで怒られるので)
+...
+```
+
+# 中身
+
+```ts:index.ts
+import { readMarkdownFileSync, writeHtmlFileSync } from "./lib/file";
+import { hideBin } from "yargs/helpers";
+import yargs from "yargs";
+import { getPackageName } from "./lib/name";
+import path from "path";
+import { marked } from "marked";
+
+const args = yargs(hideBin(process.argv))
+  .options({
+    name: {
+      type: "boolean",
+      default: false,
+      alias: "n",
+      describe: "CLI名を表示",
+    },
+    file: { type: "string", alias: "f", describe: "Markdownファイルのパス" },
+    out: {
+      type: "string",
+      default: "article.html",
+      alias: "o",
+      describe: "出力するhtmlファイルのファイル名",
+    },
+  })
+  .parseSync();
+
+// nameオプションが指定されていれば、パッケージの名前を出力する
+if (args.name) {
+  const packageName = getPackageName();
+  console.log(packageName);
+  process.exit(0);
+}
+
+// fileオプションが指定されていれば、mdファイルを読み込み、htmlファイルを指定のpathに出力する
+if (args.file) {
+  const markdownStr = readMarkdownFileSync(path.resolve(__dirname, args.file));
+  const html = marked(markdownStr);
+
+  writeHtmlFileSync(path.resolve(__dirname, args.out), html);
+}
+```
+
+```ts:getPackageName.ts
+import path from "path";
+import fs from "fs";
+
+export const getPackageName = (): string => {
+  const packageStr = fs.readFileSync(
+    path.resolve(__dirname, "../package.json"),
+    {
+      encoding: "utf-8",
+    }
+  );
+  const parsedPackage = JSON.parse(packageStr);
+
+  return parsedPackage.name;
+};
+```
+
+```ts:readMarkdownFileSync.ts
+import fs from "fs";
+
+export const readMarkdownFileSync = (path: string): string => {
+  const markdownStr = fs.readFileSync(path, { encoding: "utf-8" });
+
+  return markdownStr;
+};
+
+export const writeHtmlFileSync = (path: string, html: string): void => {
+  fs.writeFileSync(path, html, { encoding: "utf-8" });
+};
+```
+
+# 使ってみる
+
+## md ファイルを用意
+
+````md:テスト用のファイル
+  # タイトル
+
+  hello!
+
+  **テスト**
+
+  ```
+  const foo = "bar";
+  ```
+````
+
+## name オプションの指定
+
+```bash:nameオプションを指定する
+npx ts-node index.ts -n # --nameでもOK
+```
+
+## file オプションの指定
+
+```bash:fileオプションを指定する
+npx ts-node index.ts -f article.md
+```
+
+# 参考
+
+https://github.com/yargs/yargs
+
+https://www.amazon.co.jp/%E5%AE%9F%E8%B7%B5Node-js%E5%85%A5%E9%96%80-%E4%BC%8A%E8%97%A4-%E5%BA%B7%E5%A4%AA/dp/4297129566

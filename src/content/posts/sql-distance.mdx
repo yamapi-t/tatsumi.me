@@ -1,0 +1,112 @@
+---
+title: "SQLで「距離」が近い文字列を求める"
+emoji: "👏"
+type: "tech" # tech: 技術記事 / idea: アイデア
+tags: ["SQL"]
+published: true
+published_at: 2023-10-22 21:00
+---
+
+# やりたいこと
+
+ある文字列が与えられたとき、その文字列から一番近い「距離」の文字列を SQL で取得したい。
+
+例えば、日本の郵便番号は「000-0000」のようなハイフン付きの 7 桁の数字で管理されており、2 つの異なる郵便番号は下位の桁まで一致するほど近い地域の郵便番号を表す。
+
+以下のようなテーブルがあったとき、郵便番号 「4130033」に対して、「最寄り」の郵便番号を SQL で取得したい。
+
+```sql:テーブル定義
+create table postal_code (
+  pcode char(7),
+  district_name varchar(256),
+  constraint pk_code primary key(pcode)
+);
+
+insert into postal_code values
+('4130001', 'A'),
+('4130002', 'B'),
+('4130103', 'C'),
+('4130041', 'D'),
+('4103213', 'E'),
+('4380824', 'F');
+
+-- 求める結果
+-- pcode
+-- -------
+-- 4130001
+-- 4130002
+-- 4130041
+```
+
+# 回答
+
+```sql:回答
+select
+  pcode,
+  district_name
+from postal_code
+where case when pcode = '4130033' then 0
+      when pcode like '413003%' then 1
+      when pcode like '41300%' then 2
+      when pcode like '4130%' then 3
+      when pcode like '413%' then 4
+      when pcode like '41%' then 5
+      when pcode like '4%' then 6
+      else null end = (
+        select min(
+          case when pcode = '4130033' then 0
+              when pcode like '413003%' then 1
+              when pcode like '41300%' then 2
+              when pcode like '4130%' then 3
+              when pcode like '413%' then 4
+              when pcode like '41%' then 5
+              when pcode like '4%' then 6
+              else null end
+        )
+        from postal_code
+      );
+```
+
+```sql:別解
+select
+  pcode,
+  district_name
+from (
+  select
+    pcode,
+    district_name,
+    case when pcode = '4130033' then 0
+        when pcode like '413003%' then 1
+        when pcode like '41300%' then 2
+        when pcode like '4130%' then 3
+        when pcode like '413%' then 4
+        when pcode like '41%' then 5
+        when pcode like '4%' then 6
+        else null end as distance,
+    min(
+      case when pcode = '4130033' then 0
+          when pcode like '413003%' then 1
+          when pcode like '41300%' then 2
+          when pcode like '4130%' then 3
+          when pcode like '413%' then 4
+          when pcode like '41%' then 5
+          when pcode like '4%' then 6
+          else null
+    ) over (
+      order by case when pcode = '4130033' then 0
+        when pcode like '413003%' then 1
+        when pcode like '41300%' then 2
+        when pcode like '4130%' then 3
+        when pcode like '413%' then 4
+        when pcode like '41%' then 5
+        when pcode like '4%' then 6
+        else null end
+    ) as min_distance
+  from postal_code
+) tmp
+where distance = min_distance;
+```
+
+# 参考
+
+https://amzn.to/45HPa6s

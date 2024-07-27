@@ -1,0 +1,252 @@
+---
+title: "順列や組み合わせをsqlで表現する"
+emoji: "📑"
+type: "tech"
+tags:
+  - "Docker"
+published: true
+published_at: "2023-03-28 12:57"
+---
+
+# 準備
+
+## ディレクトリ構成
+
+```bash:ディレクトリ構成
+.
+├── compose.yaml
+└── postgres
+    └── init
+        └── 01_initialize.sql
+```
+
+## DB とテーブルを作成
+
+```yaml:compose.yaml
+services:
+  db:
+    image: postgres
+    container_name: postgres
+    ports:
+      - 5432:5432
+    volumes:
+      - ./postgres/init:/docker-entrypoint-initdb.d
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+```
+
+```sql:./postgres/init/01_initialize.sql
+-- DB作成
+CREATE DATABASE test_db;
+
+-- 作成したDBへ切り替え
+\c test_db
+
+CREATE TABLE public.products (
+  name VARCHAR(10) NOT NULL,
+  price INTEGER NOT NULL
+);
+
+INSERT INTO public.products VALUES('apple', 50);
+INSERT INTO public.products VALUES('orange', 100);
+INSERT INTO public.products VALUES('grape', 50);
+INSERT INTO public.products VALUES('strawberry', 100);
+INSERT INTO public.products VALUES('lemon', 80);
+INSERT INTO public.products VALUES('banana', 100);
+```
+
+## テスト
+
+```bash:データが投入されていることを確認する
+docker compose up
+psql -h localhost -p 5432 -U postgres -d test_db
+
+test_db=# select * from products;
+    name    | price
+------------+-------
+ apple      |    50
+ orange     |   100
+ grape      |    50
+ strawberry |   100
+ lemon      |    80
+ banana     |   100
+(6 rows)
+```
+
+# 重複順列
+
+```sql:重複順列
+select p1.name as name_1, p2.name as name_2 from products p1 cross join products p2;
+
+   name_1   |   name_2
+------------+------------
+ apple      | apple
+ apple      | orange
+ apple      | grape
+ apple      | strawberry
+ apple      | lemon
+ apple      | banana
+ orange     | apple
+ orange     | orange
+ orange     | grape
+ orange     | strawberry
+ orange     | lemon
+ orange     | banana
+ grape      | apple
+ grape      | orange
+ grape      | grape
+ grape      | strawberry
+ grape      | lemon
+ grape      | banana
+ strawberry | apple
+ strawberry | orange
+ strawberry | grape
+ strawberry | strawberry
+ strawberry | lemon
+ strawberry | banana
+ lemon      | apple
+ lemon      | orange
+ lemon      | grape
+ lemon      | strawberry
+ lemon      | lemon
+ lemon      | banana
+ banana     | apple
+ banana     | orange
+ banana     | grape
+ banana     | strawberry
+ banana     | lemon
+ banana     | banana
+(36 rows)
+```
+
+# 順列
+
+```sql:順列
+select p1.name as name_1, p2.name as name_2 from products p1 inner join products p2 on p1.name <> p2.name;
+
+   name_1   |   name_2
+------------+------------
+ apple      | orange
+ apple      | grape
+ apple      | strawberry
+ apple      | lemon
+ apple      | banana
+ orange     | apple
+ orange     | grape
+ orange     | strawberry
+ orange     | lemon
+ orange     | banana
+ grape      | apple
+ grape      | orange
+ grape      | strawberry
+ grape      | lemon
+ grape      | banana
+ strawberry | apple
+ strawberry | orange
+ strawberry | grape
+ strawberry | lemon
+ strawberry | banana
+ lemon      | apple
+ lemon      | orange
+ lemon      | grape
+ lemon      | strawberry
+ lemon      | banana
+ banana     | apple
+ banana     | orange
+ banana     | grape
+ banana     | strawberry
+ banana     | lemon
+(30 rows)
+```
+
+# 組み合わせ
+
+```sql
+select p1.name as name_1, p2.name as name_2
+from products p1 inner join products p2 on p1.name > p2.name;
+
+   name_1   | name_2
+------------+--------
+ orange     | apple
+ orange     | grape
+ orange     | lemon
+ orange     | banana
+ grape      | apple
+ grape      | banana
+ strawberry | apple
+ strawberry | orange
+ strawberry | grape
+ strawberry | lemon
+ strawberry | banana
+ lemon      | apple
+ lemon      | grape
+ lemon      | banana
+ banana     | apple
+(15 rows)
+```
+
+# ３つの組み合わせ
+
+```sql:順列
+select p1.name as name_1, p2.name as name_2, p3.name as name_3 from products p1 inner join products p2 on p1.name > p2.name inner join products p3 on p2.name > p3.name;
+
+  name_1   | name_2 | name_3
+------------+--------+--------
+ orange     | grape  | apple
+ orange     | grape  | banana
+ orange     | lemon  | apple
+ orange     | lemon  | grape
+ orange     | lemon  | banana
+ orange     | banana | apple
+ grape      | banana | apple
+ strawberry | orange | apple
+ strawberry | orange | grape
+ strawberry | orange | lemon
+ strawberry | orange | banana
+ strawberry | grape  | apple
+ strawberry | grape  | banana
+ strawberry | lemon  | apple
+ strawberry | lemon  | grape
+ strawberry | lemon  | banana
+ strawberry | banana | apple
+ lemon      | grape  | apple
+ lemon      | grape  | banana
+ lemon      | banana | apple
+(20 rows)
+```
+
+# 重複組み合わせ
+
+```sql:重複組み合わせ
+select p1.name as name_1, p2.name as name_2 from products p1 inner join products p2 on p1.name >= p2.name;
+
+   name_1   |   name_2
+------------+------------
+ apple      | apple
+ orange     | apple
+ orange     | orange
+ orange     | grape
+ orange     | lemon
+ orange     | banana
+ grape      | apple
+ grape      | grape
+ grape      | banana
+ strawberry | apple
+ strawberry | orange
+ strawberry | grape
+ strawberry | strawberry
+ strawberry | lemon
+ strawberry | banana
+ lemon      | apple
+ lemon      | grape
+ lemon      | lemon
+ lemon      | banana
+ banana     | apple
+ banana     | banana
+(21 rows)
+```
+
+# 参考
+
+https://amzn.to/3U40Hct

@@ -1,0 +1,38 @@
+---
+import type { MarkdownHeading } from "astro";
+import BaseLayout from "./BaseLayout.astro";
+
+type Props = {
+  title: string;
+  description?: string;
+  headings: MarkdownHeading[];
+};
+
+const { title, description, headings } = Astro.props;
+---
+
+<BaseLayout title={title} description={description}>
+  <div class="flex gap-8 mt-8">
+    <main class="w-full lg:w-4/5">
+      <slot />
+    </main>
+
+    <aside class="lg:w-1/5 sticky top-4 h-full hidden lg:block">
+      <h3 class="text-lg text-left font-semibold mb-2">目次</h3>
+
+      <ul
+        class="list-none space-y-1 text-neutral-500 dark:text-neutral-400 text-sm"
+      >
+        {
+          headings.map((heading) => (
+            <li class={`${heading.depth === 2 && "ml-4"}`}>
+              <a href={`#${encodeURIComponent(heading.slug)}`}>
+                {heading.text}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </aside>
+  </div>
+</BaseLayout>

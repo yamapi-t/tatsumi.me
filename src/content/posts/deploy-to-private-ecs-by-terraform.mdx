@@ -1,0 +1,449 @@
+---
+title: "terraformでプライベートサブネットにECSを作る"
+emoji: "😺"
+type: "tech" # tech: 技術記事 / idea: アイデア
+tags: ["AWS", "Terraform"]
+published: true
+published_at: 2023-08-05 19:40
+---
+
+# はじめに
+
+ECS をプライベートサブネットに置いて、LB をパブリックサブネットに置くような構成はよくあると思います。
+その際、ECS はプライベートサブネットにいるので、そのままだと ECR へアクセスしたり、CW Logs にログを吐いたりできません。
+そのときの対処法として、以下の 2 つのパターンがあります:
+
+1. パブリックサブネットに NAT Gateway を置き、NAT Gateway 経由でインターネットに接続し、AWS リソースにアクセスする
+2. VPC エンドポイント(VPCE)経由で VPC 外の AWS リソースにアクセスする
+
+1 の場合のデメリットとして、シンプルに NAT Gateway が高いということがあります。
+VPCE の場合はもう少し安めに済むのに加え、通信が AWS 上から出ないため、セキュリティ的にも優れてると言えます。
+
+| やり方             | 料金                                                             | セキュリティ                                      | 設定の難易度                                                                           |
+| ------------------ | ---------------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| NAT GW | 高い | インターネット経由で接続 | 簡単 |
+| VPCE | NAT GWよりは安い | AWS 環境内で接続が完結する                        | サービスごとにVPCEを立てる必要がある |
+
+詳しいコストについては以下の記事が参考になります：
+
+https://blog.jicoman.info/2020/02/cost-optimization-aws-network/
+
+# やりたいこと
+
+今回やりたいことは以下の通りです。
+
+- ECS をプライベートサブネットに立てる
+- ECS から ECR, CW Logs, S3, SSM などへの通信を VPCE 経由で行う
+- ECS Exec で稼働中のコンテナに接続する
+
+# 構成図
+
+以下のような構成を`terraform`で作ります。
+
+![構成図](/images/compressed-images/private-ecs.png)
+
+# 作っていく
+
+## vpce について
+
+ECS を private subnet に立てるためには最低限 3 つの vpce を立てる必要があり、オプションでさらに vpce が必要になります。
+
+| vpc エンドポイント                    | 種類         |  必須か |
+| ------------------------------------- | ------------ | ---------- |
+| com.amazonaws.(region).ecr.api        | IF | ◯ |
+| com.amazonaws.(region).ecr.dkr        | IF | ◯|
+| com.amazonaws.(region).s3             | GW | ◯ |
+| com.amazonaws.(region).logs           | IF | ✗ |
+| com.amazonaws.(region).secretsmanager | IF | ✗ |
+| com.amazonaws.(region).ssm            | IF | ✗ |
+| com.amazonaws.(region).ssmmessages    | IF | ✗ |
+
+詳しくは以下の記事が参考になります
+
+https://docs.aws.amazon.com/ja_jp/AmazonECR/latest/userguide/vpc-endpoints.html
+
+## コードの全体像
+
+```hcl:network/main.tf
+locals {
+  az = ["(az1)", "(az2)"]
+}
+
+resource "aws_vpc" "main" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_hostnames = true # パブリックIPアドレスを持つインスタンスにDNSホスト名を付与する
+  enable_dns_support   = true # VPC内のインスタンスにDNSサーバーを使用する
+
+  tags = {
+    Name = "main"
+  }
+}
+
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "main"
+  }
+}
+
+resource "aws_subnet" "publics" {
+  count             = 2
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index)
+  availability_zone = local.az[count.index]
+
+  tags = {
+    Name = "public-${local.az[count.index]}"
+  }
+}
+
+resource "aws_subnet" "privates" {
+  count             = 2
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index + 2)
+  availability_zone = local.az[count.index]
+
+  tags = {
+    Name = "private-${local.az[count.index]}"
+  }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+}
+
+resource "aws_route_table_association" "public" {
+  count          = 2
+  subnet_id      = aws_subnet.publics[count.index].id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.main.id
+}
+
+# s3へのvpceはGateway型なので、route tableに追加する必要がある
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id          = aws_vpc.main.id
+  service_name    = "com.amazonaws.(region).s3"
+  route_table_ids = [aws_route_table.private.id]
+
+  tags = {
+    Name = "s3_vpce"
+  }
+}
+
+resource "aws_route_table_association" "private" {
+  count          = 2
+  subnet_id      = aws_subnet.privates[count.index].id
+  route_table_id = aws_route_table.private.id
+}
+
+resource "aws_security_group" "vpce" {
+  name        = "vpce"
+  description = "vpce"
+  vpc_id      = aws_vpc.main.id
+
+  # HTTPSのみ許可すればいい
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [aws_vpc.main.cidr_block] # vpc内からのみアクセス可能
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_vpc_endpoint" "ecr_dkr" {
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.(region).ecr.dkr"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  subnet_ids          = aws_subnet.privates[*].id
+  security_group_ids  = [aws_security_group.vpce.id]
+
+  tags = {
+    Name = "ecr_dkr_vpce"
+  }
+}
+
+resource "aws_vpc_endpoint" "ecr_api" {
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.(region).ecr.api"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  subnet_ids          = aws_subnet.privates[*].id
+  security_group_ids  = [aws_security_group.vpce.id]
+
+  tags = {
+    Name = "ecr_api_vpce"
+  }
+}
+
+resource "aws_vpc_endpoint" "cloudwatch_logs" {
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.(region).logs"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  subnet_ids          = aws_subnet.privates[*].id
+  security_group_ids  = [aws_security_group.vpce.id]
+
+  tags = {
+    Name = "cloudwatch_logs_vpce"
+  }
+}
+
+resource "aws_vpc_endpoint" "ssmmessages" {
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.(region).ssmmessages"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  subnet_ids          = aws_subnet.privates[*].id
+  security_group_ids  = [aws_security_group.vpce.id]
+
+  tags = {
+    Name = "ssmmessages_vpce"
+  }
+}
+
+resource "aws_vpc_endpoint" "ssm" {
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.(region).ssm"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  subnet_ids          = aws_subnet.privates[*].id
+  security_group_ids  = [aws_security_group.vpce.id]
+
+  tags = {
+    Name = "ssm_vpce"
+  }
+}
+
+```
+
+## ALB
+
+```hcl:alb/main.tf
+resource "aws_lb" "main" {
+  name               = "main"
+  internal           = false
+  subnets            = var.public_subnet_ids
+  security_groups    = [aws_security_group.alb.id]
+  load_balancer_type = "application"
+
+  tags = {
+    Name = "main"
+  }
+}
+
+resource "aws_security_group" "alb" {
+  name        = "alb"
+  description = "alb"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_lb_listener" "main" {
+  load_balancer_arn = aws_lb.main.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.main.arn
+  }
+}
+
+resource "aws_lb_target_group" "main" {
+  name        = "main"
+  port        = 80
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  health_check {
+    path = "/"
+  }
+}
+
+```
+
+## ECS
+
+```hcl:ecs/main.tf
+resource "aws_iam_role" "nginx_task_role" {
+  name = "nginx_ecs_task_role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  # ECS TaskがSSMを使えるようにすることでECS Execできるようにする
+  inline_policy {
+    name = "ecs_exec"
+    policy = jsonencode({
+      Version = "2012-10-17"
+      Statement = [
+        {
+          Action = [
+            "ssmmessages:CreateControlChannel",
+            "ssmmessages:CreateDataChannel",
+            "ssmmessages:OpenControlChannel",
+            "ssmmessages:OpenDataChannel"
+          ]
+          Effect   = "Allow"
+          Resource = "*"
+        }
+      ]
+    })
+  }
+}
+
+# ECSコンテナエージェントが使うIAMロール
+# ECSコンテナエージェントの役割は、ECRなどからのイメージのpullや、CloudWatch Logsへのログの書き込みなど
+resource "aws_iam_role" "nginx_execution_role" {
+  name = "nginx_ecs_execution_role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  managed_policy_arns = [
+    "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+  ]
+}
+
+
+
+resource "aws_ecs_cluster" "main" {
+  name = "main"
+}
+
+resource "aws_ecs_task_definition" "nginx" {
+  family                   = "main"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "256"
+  memory                   = "512"
+  task_role_arn            = aws_iam_role.nginx_task_role.arn
+  execution_role_arn       = aws_iam_role.nginx_execution_role.arn
+
+  container_definitions = jsonencode(
+    [
+      {
+        "name" : "nginx",
+        "image" : "(ecrのuri)",
+        "essentials" : true,
+        "logConfiguration" : {
+          "logDriver" : "awslogs",
+          "options" : {
+            "awslogs-group" : aws_cloudwatch_log_group.ecs.name,
+            "awslogs-region" : "(region)",
+            "awslogs-stream-prefix" : "ecs"
+          }
+        },
+        "portMappings" : [
+          {
+            "containerPort" : 80,
+            "hostPort" : 80,
+            "protocol" : "tcp"
+          }
+        ],
+      }
+    ]
+  )
+}
+
+resource "aws_security_group" "ecs" {
+  name        = "ecs"
+  description = "ecs"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    security_groups = [var.aws_lb_security_group_id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_ecs_service" "main" {
+  name                   = "main"
+  cluster                = aws_ecs_cluster.main.id
+  task_definition        = aws_ecs_task_definition.nginx.arn
+  desired_count          = 1
+  launch_type            = "FARGATE"
+  enable_execute_command = true # ECS Execを有効化
+
+  deployment_controller {
+    type = "CODE_DEPLOY"
+  }
+
+  network_configuration {
+    assign_public_ip = false
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs.id]
+  }
+
+  load_balancer {
+    target_group_arn = var.aws_lb_target_group_arn
+    container_name   = "nginx"
+    container_port   = 80
+  }
+
+}
+
+resource "aws_cloudwatch_log_group" "ecs" {
+  name              = "/ecs/main"
+  retention_in_days = 7
+}
+
+```

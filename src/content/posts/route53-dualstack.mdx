@@ -1,0 +1,169 @@
+---
+title: "LBを作ったときにdualstackを設定することで、ipv4とipv6に同時に対応できる"
+emoji: "📑"
+type: "tech" # tech: 技術記事 / idea: アイデア
+tags: ["AWS", "Terraform"]
+published: true
+published_at: "2023-07-21 22:38"
+---
+
+# はじめに
+
+先日、route53 を眺めていたら、「dualstack」から始まるレコードがあった。
+結論から言うと、「dualstack」とは **ipv4 と ipv6 に同時に対応できる機能** のことらしい。
+
+## エイリアスレコードとは?
+
+dualstack について説明する前に、**エイリアスレコード** について説明する。
+
+エイリアスレコードは、route53 固有の機能で、ある AWS リソースに対してトラフィックをルーティングする機能のこと。具体的には、AWS リソースを作ると、その AWS リソース固有の DNS 名が勝手に作られる。(例えば、hogehoge.ap-northeast-1.amazon.com)
+
+主な使い方としては、A レコードの向き先に ip アドレスではなく、この DNS 名を指定する感じで使う。
+その意味では、CNAME レコードっぽい。
+
+## なぜエイリアスレコードが必要なのか?
+
+A レコードや AAAA レコードの向き先は ip アドレスだが、AWS リソースは ip アドレスが可変の場合が多い。(多分冗長性とかのため)
+
+エイリアスレコードを使った A レコードだったら、AWS リソースの ip が変わっても、DNS 名が自動的に新しい ip アドレスを向いてくれるのでレコードを変更したりしなくていい。
+
+> エイリアスレコードを使用して AWS リソースにトラフィックをルーティングしている場合、Route 53 はリソースでの変更を自動的に認識します。例えば、エイリアスレコード example.com が lb1-1234.us-east-2.elb.amazonaws.com の ELB ロードバランサーを指し示しているとします。ロードバランサーの IP アドレスが変更された場合、Route 53 が自動的に開始され、新しい IP アドレスを使用して DNS クエリに応答します。
+
+https://docs.aws.amazon.com/ja_jp/Route53/latest/DeveloperGuide/resource-record-sets-choosing-alias-non-alias.html
+
+## dualstack とは?
+
+以上を踏まえて、**dualstack** とは ipv4 アドレスと ipv6 アドレスの両方が引ける DNS 名のこと(もしくは、その機能のこと?)
+
+つまり、エイリアスレコードの機能を用いて、A レコードの向き先にもできるし、AAAA レコードの向き先にもできる DNS 名のこと。
+
+デフォルトだとこの DNS 名は「dualstack」から始まる。
+
+# 実験してみる
+
+基本がわかったところで、terraform で実際に作ってみようと思う。
+
+ELB を作るだけじゃーんって思ったけど、vpc の ipv6 対応とかあんまりしたことなくて微妙に面倒だった。
+
+## terraform で作る
+
+ざっとできたものが以下。
+
+```hcl:alb/main.tf
+locals {
+  az = ["ap-northeast-1a", "ap-northeast-1c"]
+}
+
+resource "aws_vpc" "main" {
+  cidr_block =  "10.0.0.0/16"
+  assign_generated_ipv6_cidr_block = true
+
+  tags = {
+    Name = "dualstack-test-lb"
+  }
+}
+
+resource "aws_subnet" "public" {
+  count = 2
+  vpc_id = aws_vpc.main.id
+  cidr_block = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index)
+  ipv6_cidr_block = cidrsubnet(aws_vpc.main.ipv6_cidr_block, 8, count.index)
+  availability_zone = local.az[count.index]
+
+  tags = {
+    Name = "dualstack-test-lb-public${count.index}}"
+  }
+}
+
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "dualstack-test-lb-igw"
+  }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+}
+
+resource "aws_route_table_association" "public" {
+  count = 2
+  subnet_id = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_security_group" "lb_sg" {
+  name = "dualstack-test-lb-sg"
+  description = "Used in the terraform"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port = 80
+    to_port = 80
+    protocol = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port = 0
+    to_port = 0
+    protocol = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_lb" "main" {
+  name = "dualstack-test-lb"
+  internal = false
+  load_balancer_type = "application"
+  security_groups = [ aws_security_group.lb_sg.id ]
+  subnets = aws_subnet.public.*.id
+  ip_address_type = "ipv4" # dualstack or ipv4
+  enable_deletion_protection = false
+
+  tags = {
+    Name = "dualstack-test-lb"
+  }
+}
+
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.main.arn
+  port = 80
+  protocol = "HTTP"
+
+  default_action {
+    type = "fixed-response"
+
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "Hello, World"
+      status_code = "200"
+    }
+  }
+}
+
+```
+
+## dig コマンドで実験
+
+terraform で AWS リソースができたら、ELB の DNS 名をとってきて、dig コマンドで実験してみた。
+
+ちなみに、dig コマンドは`+short` というオプションをつけることで、IP アドレスだけ出力できる。
+
+```bash:Aレコード
+dig (dns名) +short # ipv4を引く
+```
+
+ipv6 アドレスを dig コマンドで引くには以下のような感じ
+
+```bash:AAAAレコード
+# -t = type : DNSレコードの種類
+# @8.8.8.8  : DNSサーバーによってはipv6対応していないかもしれないのでGoogle Public DNS(8.8.8.8)をDNSサーバーに指定して問い合わせ
+dig -t AAAA @8.8.8.8 (dns名) +short # ipv6を引く
+```

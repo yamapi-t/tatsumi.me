@@ -1,0 +1,617 @@
+---
+title: "app routerでSSGしたものを、s3とcloudfrontを使って独自ドメインでホスティングする構成をaws-cdkで作る"
+emoji: "📝"
+type: "tech" # tech: 技術記事 / idea: アイデア
+tags:
+  - "AWS"
+  - "Next.js"
+published: true
+published_at: "2023-06-12 17:50"
+---
+
+# やりたいこと
+
+- zenn に記事を書いたときに自分のブログにも投稿したい
+- 勉強のため aws で作りたい
+- 勉強のため app router を使いたい
+- 独自ドメインにしたい
+- aws リソースは aws-cdk で作りたい
+
+# できたもの
+
+このチュートリアル手順 + 少し md のスタイルとかの調整などしています
+
+https://tatsumiyamamoto.com
+
+以下のような感じになっています
+
+- zenn-cli を使って github リポジトリと同期(push 時に自動投稿)
+- git push 時に codebuild が走って s3 へデプロイ(自分のブログにデプロイ)
+
+![構成図](/images/compressed-images/s3-cloudfront.png)
+
+# 準備
+
+```bash:準備
+mkdir zenn-next-s3-cloudfront
+cd zenn-next-s3-cloudfront
+git init
+
+npx create-next-app --ts
+
+# Need to install the following packages:
+#   create-next-app
+# Ok to proceed? (y) y
+# ✔ What is your project named? … frontend
+# ✔ Would you like to use ESLint with this project? … Yes
+# ✔ Would you like to use Tailwind CSS with this project? … No
+# ✔ Would you like to use `src/` directory with this project? … Yes
+# ✔ Use App Router (recommended)? … Yes
+# ✔ Would you like to customize the default import alias? … No
+
+mkdir infra
+cd infra
+npx cdk init app --language typescript
+
+tree -aL 1
+.
+├── .git
+├── frontend
+└── infra
+
+4 directories, 0 files
+```
+
+# app router で SSG する
+
+## zod のインストール
+
+```bash:zodを入れる
+npm i zod
+```
+
+## ディレクトリ構成
+
+```bash:ディレクトリ構成
+tree -aL 4
+
+.
+└── app
+    ├── _libs
+    │   └── article.ts
+    ├── articles
+    │   └── [id]
+    │       └── page.tsx
+    ├── favicon.ico
+    ├── layout.tsx
+    └── page.tsx
+
+5 directories, 5 files
+```
+
+## 作っていく
+
+```ts:_libs/article.ts
+import { z } from "zod";
+
+export const articleSchema = z.object({
+  id: z.number(),
+  userId: z.number(),
+  title: z.string(),
+  completed: z.boolean(),
+});
+
+export const articlesSchema = z.array(articleSchema);
+
+export type Article = z.infer<typeof articleSchema>;
+export type Articles = z.infer<typeof articlesSchema>;
+
+export const getArticle = async (id: string): Promise<Article> => {
+  try {
+    const res = await fetch(
+      `https://jsonplaceholder.typicode.com/todos/${encodeURIComponent(id)}`
+    );
+    const article = await res.json();
+
+    return articleSchema.parse(article);
+  } catch (err: unknown) {
+    if (err instanceof z.ZodError) {
+      throw new Error(
+        `Invalid article data: ${err.errors.map((e) => e.message).join(", ")}`
+      );
+    }
+    throw err;
+  }
+};
+
+export const getArticles = async (): Promise<Articles> => {
+  try {
+    const res = await fetch("https://jsonplaceholder.typicode.com/todos");
+    const articles = await res.json();
+
+    return articlesSchema.parse(articles);
+  } catch (err: unknown) {
+    if (err instanceof z.ZodError) {
+      throw new Error(
+        `Invalid article data: ${err.errors.map((e) => e.message).join(", ")}`
+      );
+    }
+    throw err;
+  }
+};
+
+
+```
+
+```tsx:page.tsx
+import Link from "next/link";
+import { getArticles } from "./_libs/article";
+
+export default async function Home() {
+  const articles = await getArticles();
+
+  return (
+    <main>
+      {articles.map((article) => {
+        return (
+          <Link
+            href={`/articles/${encodeURIComponent(article.id)}`}
+            key={article.id}
+          >
+            <h2>{`${article.id} ${article.title}`}</h2>
+          </Link>
+        );
+      })}
+    </main>
+  );
+}
+
+```
+
+```tsx:articles/[id]/page.tsx
+import { getArticle, getArticles } from "@/app/_libs/article";
+
+export async function generateStaticParams() {
+  const articles = await getArticles();
+
+  const params = articles.map((article) => {
+    return {
+      id: article.id.toString(),
+    };
+  });
+
+  return params;
+}
+
+export default async function Article({ params }: { params: { id: string } }) {
+  const article = await getArticle(params.id);
+
+  return (
+    <div>
+      <h1>Article {article.id}</h1>
+      <p>{article.title}</p>
+    </div>
+  );
+}
+
+```
+
+## npm scripts の設定
+
+app router では以下のようにすることで静的ファイルのエクスポートができます
+
+```js:next.config.js
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  output: "export", // next build時にoutディレクトリに静的エクスポート(以前のnext exportコマンド)
+};
+
+module.exports = nextConfig;
+
+```
+
+```json:package.json
+{
+  "name": "frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "npx serve@latest out", // 'output': 'export'を設定しているときは next start ではなくこちらを使う
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@types/node": "20.3.0",
+    "@types/react": "18.2.11",
+    "@types/react-dom": "18.2.4",
+    "eslint": "8.42.0",
+    "eslint-config-next": "13.4.5",
+    "next": "13.4.5",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "typescript": "5.1.3",
+    "zod": "^3.21.4"
+  }
+}
+
+```
+
+以上のように設定し、以下のコマンドを実行します
+
+```bash:ビルドして動作確認する
+npm run build # next buildコマンドが実行され ./out 配下にSSGされる
+npm start # http://localhost:3000 でサーバーが立ち上がる
+```
+
+# aws-cdk で静的サイトホスティングを独自ドメインで作る
+
+## ドメインを取得しておく
+
+以下のサイトとかを参考に route53 でドメインを取得します。
+
+https://chigusa-web.com/blog/route53-reg/
+
+https://qiita.com/NaokiIshimura/items/89e104dd2d8dd950780e
+
+## s3+cloudfront の stack を作る
+
+基本的には以下の記事と同じですが、route53 への A レコードの登録を追加でしたりします。
+
+https://tatsumiyamamoto.com/articles/26f8b7bfea6243
+
+```ts:infra/lib/infra-stack.ts
+import {
+  App,
+  CfnOutput,
+  RemovalPolicy,
+  Stack,
+  StackProps,
+  aws_cloudfront,
+  aws_cloudfront_origins,
+  aws_codebuild,
+  aws_iam,
+  aws_route53,
+  aws_route53_targets,
+  aws_s3,
+  aws_s3_deployment,
+} from "aws-cdk-lib";
+import { Certificate } from "aws-cdk-lib/aws-certificatemanager";
+import { IHostedZone } from "aws-cdk-lib/aws-route53";
+import "dotenv/config";
+
+type ZennS3CloudFrontProps = StackProps & {
+  domainName: string;
+  certificate: Certificate;
+  publicHostedZone: IHostedZone;
+};
+
+const OWNER = process.env.GITHUB_OWNER ?? "";
+const REPO = process.env.GITHUB_REPO ?? "";
+const BRANCH = process.env.GITHUB_BRANCH ?? "";
+const GOOGLE_SEARCH_CONSOLE_VERIFICATION =
+  process.env.GOOGLE_SITE_VERIFICATION ?? "";
+
+export class ZennS3CloudFrontStack extends Stack {
+  constructor(scope: App, id: string, props: ZennS3CloudFrontProps) {
+    super(scope, id, props);
+    const { domainName, certificate, publicHostedZone } = props;
+
+    // 静的ホスティング用のバケットを作成
+    const bucket = new aws_s3.Bucket(this, "ZennStaticHostingBucket", {
+      bucketName: "zenn-static-hosting-bucket",
+      removalPolicy: RemovalPolicy.DESTROY, // destroy時にバケットを削除する
+      autoDeleteObjects: true, // destroy時にバケット内のオブジェクトも削除する
+    });
+
+    // cloudfront用のoriginAccessIdentityを作成
+    const originAccessIdentity = new aws_cloudfront.OriginAccessIdentity(
+      this,
+      "ZennOriginAccessIdentity",
+      {
+        comment: "ZennBlogOriginAccessIdentity",
+      }
+    );
+
+    // bucket policyを作成
+    const bucketPolicy = new aws_iam.PolicyStatement({
+      actions: ["s3:GetObject"], // GetObjectのみ許可
+      resources: [`${bucket.bucketArn}/*`], // バケット内の全てのオブジェクトを対象
+      // originAccessIdentityから(CloudFront経由でのアクセス)のみを許可
+      principals: [
+        new aws_iam.CanonicalUserPrincipal(
+          originAccessIdentity.cloudFrontOriginAccessIdentityS3CanonicalUserId
+        ),
+      ],
+    });
+
+    // bucketにpolicyを追加
+    bucket.addToResourcePolicy(bucketPolicy);
+
+    // ルーティングの調整を行う
+    const cloudFrontFuntion = new aws_cloudfront.Function(
+      this,
+      "CloudFrontFunction",
+      {
+        code: aws_cloudfront.FunctionCode.fromFile({
+          filePath: "lib/cloudfront-function.js",
+        }),
+      }
+    );
+
+    const distribution = new aws_cloudfront.Distribution(
+      this,
+      "BlogDistribution",
+      {
+        comment: "ZennBlogDistribution",
+        defaultRootObject: "index.html",
+        defaultBehavior: {
+          compress: true,
+          viewerProtocolPolicy:
+            aws_cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: aws_cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+          origin: new aws_cloudfront_origins.S3Origin(bucket, {
+            originAccessIdentity,
+          }),
+          functionAssociations: [
+            {
+              function: cloudFrontFuntion,
+              eventType: aws_cloudfront.FunctionEventType.VIEWER_REQUEST,
+            },
+          ],
+        },
+        errorResponses: [
+          {
+            httpStatus: 404,
+            responseHttpStatus: 404,
+            responsePagePath: "/404.html",
+          },
+        ],
+        certificate,
+        domainNames: [domainName],
+      }
+    );
+
+    // Aレコードを作成
+    new aws_route53.ARecord(this, "ZennBlogARecord", {
+      recordName: domainName,
+      zone: publicHostedZone,
+      target: aws_route53.RecordTarget.fromAlias(
+        new aws_route53_targets.CloudFrontTarget(distribution)
+      ),
+    });
+
+    // Google Search Console用のTXTレコードを作成
+    new aws_route53.TxtRecord(this, "ZennBlogGoogleSearchConsoleRecord", {
+      recordName: domainName,
+      zone: publicHostedZone,
+      values: [
+        `google-site-verification=${GOOGLE_SEARCH_CONSOLE_VERIFICATION}`,
+      ],
+    });
+
+    // s3にデプロイ
+    new aws_s3_deployment.BucketDeployment(this, "ZennBlogBucketDeployment", {
+      destinationBucket: bucket,
+      distribution,
+      sources: [
+        aws_s3_deployment.Source.data(
+          "/index.html",
+          "<html><body><h1>Hello, World!</h1></body></html>"
+        ),
+      ],
+    });
+
+    const buildSpec = {
+      version: "0.2",
+      phases: {
+        pre_build: {
+          commands: ["cd frontend && npm ci"],
+        },
+        build: {
+          commands: ["npm run build"],
+        },
+        post_build: {
+          commands: [
+            "aws s3 sync ./out s3://(バケット名) --delete", // s3 cp ではなく s3 syncでデプロイすることで既存ファイルの削除も行うことができる
+          ],
+        },
+      },
+    };
+
+    // codebuild用のroleを作成
+    const codebuildRole = new aws_iam.Role(this, "CodeBuildRole", {
+      roleName: "ZennBlogCodeBuildRole",
+      assumedBy: new aws_iam.ServicePrincipal("codebuild.amazonaws.com"),
+    });
+
+    // s3へのアクセス権限を追加
+    codebuildRole.addManagedPolicy(
+      aws_iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonS3FullAccess")
+    );
+
+    const codebuild = new aws_codebuild.Project(this, "CodeBuild", {
+      projectName: "ZennBlogCodeBuild",
+      source: aws_codebuild.Source.gitHub({
+        owner: OWNER,
+        repo: REPO,
+        branchOrRef: BRANCH,
+        webhook: true,
+      }),
+      environment: {
+        privileged: true,
+        buildImage: aws_codebuild.LinuxBuildImage.STANDARD_7_0,
+      },
+      buildSpec: aws_codebuild.BuildSpec.fromObject(buildSpec),
+      role: codebuildRole,
+      cache: aws_codebuild.Cache.bucket(bucket),
+    });
+
+    new CfnOutput(this, "URL", {
+      value: `https://${domainName}`,
+    });
+  }
+}
+
+```
+
+```js:lib/cloudfront-function.js
+// cloudfront functionはES6以前の記法で書く必要がある
+// アロー関数, let, constなどは使えない
+function handler(event) {
+  var request = event.request;
+  var uri = request.uri;
+
+  // '/'の場合はindex.htmlを返す
+  if (uri === "/") return request;
+
+  var filename = uri.split("/").pop();
+
+  if (!filename) {
+    return {
+      status: "302",
+      statusDescription: "Found",
+      headers: {
+        location: [
+          {
+            key: "Location",
+            value: uri.replace(/\/+$/, "") || "/",
+          },
+        ],
+      },
+    };
+  } else if (!filename.includes(".")) {
+    request.uri = uri.concat(".html");
+  }
+
+  return request;
+}
+
+```
+
+## cloudfront 用の証明書を us-east-1 で取る必要がある
+
+cloudfront 用の証明書は us-east-1 で取る必要があります。
+
+https://tmokmss.hatenablog.com/entry/20230130/1675040258
+
+aws-cdk では同じ app construct で別の region の stack をデプロイすることができます
+
+https://dev.classmethod.jp/articles/aws-cdk-to-see-if-stacks-in-different-regions-can-be-deployed-in-the-same-app-construct/
+
+これを用いて、
+
+1. us-east-1 で証明書を取得
+2. ap-northeast-1 などの別リージョン(s3 + cloudfront を立てたいリージョン)で証明書を使う
+
+という方法でいきます。
+
+```ts:infra/lib/us-east-1-stack.ts
+import {
+  App,
+  Stack,
+  StackProps,
+  aws_certificatemanager,
+  aws_route53,
+} from "aws-cdk-lib";
+import { Certificate } from "aws-cdk-lib/aws-certificatemanager";
+import { IHostedZone } from "aws-cdk-lib/aws-route53";
+
+type ZennUsEast1StackProps = StackProps & {
+  domainName: string;
+};
+
+export class ZennUsEast1Stack extends Stack {
+  public readonly publicHostedZone: IHostedZone;
+  public readonly certificate: Certificate;
+
+  constructor(scope: App, id: string, props: ZennUsEast1StackProps) {
+    super(scope, id, props);
+
+    const { domainName } = props;
+
+    // パブリックホストゾーンを作成
+    const publicHostedZone = aws_route53.HostedZone.fromLookup(
+      this,
+      "ZennHostedZone",
+      {
+        domainName,
+      }
+    );
+
+    // cloudfrontように証明書を作成(cloudfrontの制約でus-east-1で作成する必要がある)
+    const certificate = new aws_certificatemanager.Certificate(
+      this,
+      "ZennCertificate",
+      {
+        domainName,
+        certificateName: "ZennCertificate",
+        validation:
+          aws_certificatemanager.CertificateValidation.fromDns(
+            publicHostedZone
+          ),
+      }
+    );
+
+    this.certificate = certificate;
+    this.publicHostedZone = publicHostedZone;
+  }
+}
+
+```
+
+## ルーティングの調整を cloudfront function で行う
+
+そのままの設定だとルーティングがうまくいかないので、lambda@edge または cloudfront function を使って調整をします。
+cloudfront function は古い JS の記法しか使えなかったり容量制限がありますが、lambda@edge に比べて安いみたいです。
+
+https://qiita.com/shinnoki/items/9cf68e68cbe594732b4b
+
+## クロスリージョンな stack のデプロイ
+
+上で作成した二つの stack をデプロイします。stack を作成する際のコンストラクタの引数として、作成先の region と、`crossRegionReferences: true`を指定することでクロスリージョン参照ができるようになります。
+
+```ts:infra/bin/infra.ts
+#!/usr/bin/env node
+import "source-map-support/register";
+import * as cdk from "aws-cdk-lib";
+import { ZennUsEast1Stack } from "../lib/us-east-1-stack";
+import { ZennS3CloudFrontStack } from "../lib/infra-stack";
+
+const app = new cdk.App();
+
+const domainName = '独自ドメイン(例.https://google.com)'
+
+const usEast1 = new ZennUsEast1Stack(app, "UsEast1Stack", {
+  env: {
+    account: 'アカウントID'
+    region: "us-east-1",
+  },
+  crossRegionReferences: true, // クロスリージョン参照をON
+  domainName,
+});
+
+new ZennS3CloudFrontStack(app, "ZennS3CloudFrontStack", {
+  env: {
+    account: 'アカウントID'
+    region: 's3 + cloudfrontを作成したい先のregion(例. ap-northeast-1)'
+  },
+  crossRegionReferences: true, // クロスリージョン参照をON
+  domainName,
+  // usEast1スタックからの参照
+  certificate: usEast1.certificate,
+  publicHostedZone: usEast1.publicHostedZone,
+});
+```
+
+# デプロイ
+
+```bash:関連するStackをすべてデプロイする
+npx cdk deploy --all
+```
+
+# デプロイしたリソースの削除
+
+```bash:リソースを削除する
+npx cdk destroy
+```

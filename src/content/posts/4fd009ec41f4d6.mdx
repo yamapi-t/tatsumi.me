@@ -1,0 +1,184 @@
+---
+title: "コンポーネントに型をつけるときFCを使うかJSX.Elementを使うか"
+emoji: "🔥"
+type: "tech"
+tags:
+  - "React"
+  - "TypeScript"
+published: true
+published_at: "2022-12-15 19:45"
+---
+
+# 最初に
+
+この記事は qiita から移行したものです。
+
+# この記事を書く動機
+
+メモ
+間違っている部分があればコメントで教えてください。
+
+# 前提知識
+
+https://kray.jp/blog/dont-have-to-use-react-fc-and-react-vfc/
+
+https://github.com/typescript-cheatsheets/react#function-components
+
+# 問題
+
+以下、尊敬するエンジニアの方々のツイートを引用させていただきました(いつもツイートから勉強させてもらっています。ありがとうございます！)：
+
+https://twitter.com/oukayuka/status/1519158151202832384
+
+https://twitter.com/oukayuka/status/1519158757183262722
+
+https://twitter.com/uhyo_/status/1519159735916052480
+
+# これまでの経緯を振り返る
+
+## React v17 までの書き方
+
+- FC と VFC を使い分ける方法
+  基本は VFC を使い、children が props に必要なものだけ FC を使う：
+
+```typescript:React v17 までの書き方
+// 普通のコンポーネントにはVFCを使う
+export const Button: VFC<{ text: string }> = ({ text }) => {
+  return <button>{text}</button>;
+};
+
+// ラッパーコンポーネントなどchildrenが必要なものだけFCを使う：
+export const Layout: FC = ({ children }) => {
+  return (
+    <>
+      <Header />
+      {children}
+      <Footer />
+    </>
+  );
+};
+```
+
+もしくは VFC だけを使い、children が必要なときは明示的に props に書く：
+
+```typescript:React v17 までの書き方
+export const Layout: VFC<{ children: ReactNode }> = ({ children }) => {
+  return (
+    <>
+      <Header />
+      {children}
+      <Footer />
+    </>
+  );
+};
+```
+
+- JSX.Element を使う方法(v18 でも変更なし)
+
+```typescript:JSX.Element を使う方法(v18 でも変更なし)
+// propsの型の宣言
+type AppProps = {
+  message: string;
+};
+
+// Function Componentの最も簡単な宣言方法です。返り値の型は推論されます。
+const App = ({ message }: AppProps) => <div>{message}</div>;
+
+// もし返り値として違う方を返したときにエラーになるように、返り値の型を注釈することもできます
+const App = ({ message }: AppProps): JSX.Element => <div>{message}</div>;
+
+// インラインで型宣言をすることもできます。propsの型の命名を省くことができますが、くどく見えます
+const App = ({ message }: { message: string }) => <div>{message}</div>;
+```
+
+https://github.com/typescript-cheatsheets/react#function-components
+
+## React v18 による変更
+
+> React 18 では、@types/react で、私たちが長い間抱えていた問題を修正する機会を得ました。私たちはもともと React 17 でこれらを修正したかったのですが、React 17 が段階的な移行を可能にする大きなステップだったため、保留にしていました。これらの変更の 1 つは、**React.FunctionComponent 型における暗黙の children の削除**です。なぜこの変更を行いたいのか、どのようにすれば移行を楽にできるのかを説明していこうと思います。
+
+https://solverfox.dev/writing/no-implicit-children/
+
+### FC に暗黙の children が渡されなくなった
+
+React v18 以降では、以下のコードが動かなくなる：
+
+```typescript:React v18で動かないコード
+import * as React from "react";
+
+const Input: React.FC = ({ children }) => <div>{children}</div>;
+//                         ^^^^^^^^ will error with "Property 'children'
+//                                  does not exist on type '{}'.
+```
+
+一言でいうと、v18 以降の FC はそれまでの VFC になった。
+
+### VFC が非推奨になった
+
+なった。
+
+### Q. なんでこんなことしたの？
+
+> A. 暗黙の children は、確かに component を素早くタイプできるのはいいのですが、さまざまなバグも隠されてしまいます。
+
+https://solverfox.dev/writing/no-implicit-children/
+
+React.FC から暗黙の children を削除することは、具体的には次の点で効果があるとのこと：
+
+- React.FC と単純な function 宣言との間で、挙動の一貫性がとれる
+- 余剰な children が props として与えられたときにエラーになる
+
+# これからどう書くか
+
+大きく 2 つに分けられると思っています。(他あったら教えてください)
+これに関してはチームで統一する必要があると思っています。
+
+## FC を使う
+
+ありです。
+あえてデメリットを挙げるなら、「React FC」とかで検索すると v17 までの記事が結構でてきて、「FC より VFC を使うべき！」みたいなこと書かれてるのがちょっと怖いかなって思っています。
+
+```typescript:FCを使う方法
+// 普通のコンポーネントの書き方
+export const Button: FC<{ text: string }> = ({ text }) => {
+  return <button>{text}</button>;
+};
+
+// childrenが必要なコンポーネントの書き方(PropsWithChildrenを使う書き方もあるようです)
+export const Layout: FC<{ children: ReactNode }> = ({ children }) => {
+  return (
+    <>
+      <Header />
+      {children}
+      <Footer />
+    </>
+  );
+};
+```
+
+## JSX.Element を使う
+
+ありです。ちなみに僕はこっち派です。
+理由はこれまでそうしてきて、v18 でも特に書き方は変わらないみたいなので...。
+デメリットとしては冒頭にうひょさんのツイートにあるように次の点にあるみたいです：
+
+- 関数の返り値の型を推論させる必要がある
+- 引数と返り値の型を 2 箇所書く必要がある
+
+```typescript:JSX.Elementを使う方法
+// 普通のコンポーネントの書き方
+export const Button = ({ text }: { text: sring }): JSX.Element => {
+  return <button>{text}</button>;
+};
+
+// childrenが必要なコンポーネントの書き方
+export const Layout = ({ children }: { children: ReactNode }): JSX.Element => {
+  return (
+    <>
+      <Header />
+      {children}
+      <Footer />
+    </>
+  );
+};
+```

@@ -1,0 +1,122 @@
+---
+import type { GetStaticPaths } from "astro";
+import { getCollection } from "astro:content";
+import H1 from "../../components/H1.astro";
+import H2 from "../../components/H2.astro";
+import P from "../../components/P.astro";
+import Ul from "../../components/Ul.astro";
+import Ol from "../../components/Ol.astro";
+import BlockQuote from "../../components/Blockquote.astro";
+import Table from "../../components/Table.astro";
+import PostPageLayout from "../../layouts/PostPageLayout.astro";
+
+export const getStaticPaths = (async () => {
+  const posts = await getCollection("posts");
+
+  return posts.map((post) => {
+    return {
+      params: { slug: post.slug },
+      props: { post },
+    };
+  });
+}) satisfies GetStaticPaths;
+
+const { post } = Astro.props;
+const { Content, headings } = await post.render();
+
+const filteredHeadings = headings.filter((heading) => heading.depth <= 2);
+---
+
+<style is:global>
+  @tailwind components;
+
+  @layer components {
+    /* code-block */
+    .remark-code-container {
+      @apply my-6 text-sm;
+
+      .remark-code-title {
+        @apply px-2 py-2 text-neutral-100 bg-neutral-700 rounded-t;
+
+        + pre {
+          @apply px-4 py-2 rounded-t-none rounded;
+        }
+      }
+    }
+
+    /* link-card */
+    .rlc-container {
+      @apply w-full mx-auto my-6 flex overflow-hidden border-2 border-neutral-200 dark:border-neutral-700 rounded-md;
+
+      .rlc-info {
+        @apply overflow-hidden p-4 flex flex-col gap-4 justify-between grow shrink text-left;
+
+        .rlc-title {
+          @apply font-semibold text-ellipsis;
+        }
+
+        .rlc-description {
+          @apply text-sm text-ellipsis;
+        }
+
+        .rlc-url-container {
+          @apply flex items-center;
+
+          .rlc-favicon {
+            @apply mr-2 size-4;
+          }
+
+          .rlc-url {
+            @apply text-xs text-ellipsis whitespace-nowrap overflow-hidden text-neutral-500;
+          }
+        }
+      }
+
+      .rlc-image-container {
+        @apply shrink-0 grow-0 basis-1/5;
+
+        .rlc-image {
+          @apply rounded-br-none rounded-tr-md object-cover w-full h-full;
+        }
+      }
+    }
+  }
+</style>
+
+<PostPageLayout title={post.data.title} headings={filteredHeadings}>
+  <div class="flex flex-col gap-2">
+    <h2 class="text-2xl text-center font-semibold">{post.data.title}</h2>
+    <p class="text-right text-neutral-600 dark:text-neutral-300">
+      {post.data.published_at.toString().slice(0, 10)}
+    </p>
+
+    <div class="flex gap-2 justify-end">
+      {
+        post.data.tags.map((tag) => {
+          return (
+            <a
+              href={`/tags/${encodeURIComponent(tag)}`}
+              class="bg-neutral-100 dark:bg-neutral-600 text-neutral-900 dark:text-neutral-100 px-2 py-1 rounded-full text-xs"
+            >
+              {tag}
+            </a>
+          );
+        })
+      }
+    </div>
+
+    <article>
+      <Content
+        components={{
+          h1: H1,
+          h2: H2,
+          p: P,
+          ol: Ol,
+          ul: Ul,
+          blockquote: BlockQuote,
+          table: Table,
+        }}
+      />
+    </article>
+  </div>
+</PostPageLayout>

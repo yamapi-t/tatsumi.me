@@ -1,0 +1,86 @@
+---
+title: "Chakra UIとReact Hook Formで複数チェックボックスを作る"
+emoji: "👋"
+type: "tech"
+tags:
+  - "JavaScript"
+  - "React"
+  - "TypeScript"
+published: true
+published_at: "2023-01-24 08:53"
+---
+
+# Chakra UI と React Hook Form を組み合わせるときのサンプル
+
+大体は以下の公式サイトを参考にすればいい
+https://chakra-ui.com/getting-started/with-hook-form
+
+# 複数チェックボックスの場合
+
+`<Controller />`コンポーネントの`render`を使う
+
+```tsx:複数チェックボックスの場合
+import {
+  Button,
+  Checkbox,
+  CheckboxGroup,
+  FormControl,
+  FormErrorMessage,
+  FormLabel,
+  Input,
+} from "@chakra-ui/react";
+import { Controller, SubmitHandler, useForm } from "react-hook-form";
+
+type Input = {
+  elements: string[];
+};
+
+const fruits = ["りんご", "いちご", "グレープフルーツ"];
+
+export const MultipleCheckBoxes: React.FC = () => {
+  const {
+    handleSubmit,
+    control,
+    formState: { errors, isSubmitting },
+  } = useForm<Input>();
+
+  const onSubmit: SubmitHandler<Input> = async ({ elements }) => {
+    console.log(elements);
+  };
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <FormControl isInvalid={Boolean(errors.elements)}>
+        <FormLabel>好きな果物(複数選択可)</FormLabel>
+
+        <Controller
+          name="elements"
+          control={control}
+          render={({ field }) => {
+            return (
+              <CheckboxGroup {...field}>
+                {fruits.map((fruit) => {
+                  return (
+                    <Checkbox key={fruit} value={fruit} name="elements">
+                      {fruit}
+                    </Checkbox>
+                  );
+                })}
+              </CheckboxGroup>
+            );
+          }}
+        />
+        <FormErrorMessage>
+          {errors.elements && errors.elements.message}
+        </FormErrorMessage>
+      </FormControl>
+
+      <Button isLoading={isSubmitting} type="submit">
+        送信
+      </Button>
+    </form>
+  );
+};
+```
+
+同じようなやり方で、他のコンポーネントも React Hook Form でコントロールできる気がしている...

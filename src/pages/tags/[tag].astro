@@ -1,0 +1,37 @@
+---
+import type { GetStaticPaths } from "astro";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import { getCollection } from "astro:content";
+import ArticleCard from "../../components/ArticleCard.astro";
+
+export const getStaticPaths = (async () => {
+  const posts = await getCollection("posts");
+  const uniqueTags = [...new Set(posts.flatMap((post) => post.data.tags))];
+
+  return uniqueTags.map((tag) => {
+    const filteredPosts = posts.filter((post) => post.data.tags.includes(tag));
+
+    return {
+      params: { tag },
+      props: {
+        posts: filteredPosts,
+      },
+    };
+  });
+}) satisfies GetStaticPaths;
+
+const { tag } = Astro.params;
+const { posts } = Astro.props;
+---
+
+<BaseLayout title={tag}>
+  <h2 class="font-semibold text-xl my-4">{tag}に関する記事</h2>
+
+  <div class="flex flex-col gap-4">
+    {
+      posts.map((post) => {
+        return <ArticleCard post={post} />;
+      })
+    }
+  </div>
+</BaseLayout>

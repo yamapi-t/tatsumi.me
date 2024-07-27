@@ -1,0 +1,81 @@
+---
+title: "app routerでsitemapを作る"
+emoji: "🤖"
+type: "tech" # tech: 技術記事 / idea: アイデア
+tags: ["Next.js", "TypeScript"]
+published: true
+published_at: "2023-06-12 17:00"
+---
+
+# はじめに
+
+以下の記事を参考にすればいいようです
+
+https://nextjs.org/docs/app/api-reference/file-conventions/metadata/sitemap
+
+# 静的な場合の例
+
+```ts:app/sitemap.ts
+import { MetadataRoute } from "next";
+
+export default function sitemap(): MetadataRoute.Sitemap {
+  const baseUrl = process.env.NEXT_PUBLIC_URL ?? '';
+  const lastModified = new Date();
+
+  const staticPaths = [
+    {
+      url: `${baseUrl}`,
+      lastModified,
+    },
+    {
+      url: `${baseUrl}/about`,
+      lastModified,
+    },
+  ];
+
+  return staticPaths;
+}
+
+```
+
+# 動的な場合の例
+
+```ts:app/sitemap.ts
+import { MetadataRoute } from "next";
+import { getArticles } from "../libs/article";
+
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+  const baseUrl = process.env.NEXT_PUBLIC_URL ?? '';
+  const lastModified = new Date();
+
+  const staticPaths = [
+    {
+      url: `${baseUrl}`,
+      lastModified,
+    },
+    {
+      url: `${baseUrl}/about`,
+      lastModified,
+    },
+  ];
+
+  const articles = await getArticles();
+  const dynamicPaths = articles.map((article) => {
+      return {
+        url: `${baseUrl}/articles/${article.slug}`,
+        lastModified,
+      };
+    });
+
+  return [...staticPaths, ...dynamicPaths];
+}
+```
+
+# テスト
+
+以下のようなコマンドを実行し,http://localhost:3000/sitemap.xml にアクセスなどすれば OK です
+
+```bash:テスト
+npm run build # next build
+npm start # npx serve@latest out
+```

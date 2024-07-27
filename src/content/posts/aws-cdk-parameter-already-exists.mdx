@@ -1,0 +1,44 @@
+---
+title: "aws-cdk で Received response status [FAILED] from custom resource. Message returned: ParameterAlreadyExists というエラーがでたときの解決方法"
+emoji: "🍣"
+type: "tech" # tech: 技術記事 / idea: アイデア
+tags: ["AWS", "TypeScript"]
+published: true
+published_at: "2023-07-15 14:25"
+---
+
+# 現象
+
+`npx cdk deploy --all` や `npx cdk destroy --all` を繰り返していたら、以下のようなエラーが出た。
+
+```bash:エラー内容
+Received response status [FAILED] from custom resource. Message returned: ParameterAlreadyExists: The parameter already exists. To overwrite this value, set the overwrite option in the request to true.
+```
+
+`npx cdk destroy --all` をやり直してみたり、マネジメントコンソールから stack を削除してみたり、色々試したが解決しなかった。
+エラーで検索してみると、 stackoverflow や github の issue がヒットしたが、具体的な解決方法は載っていなかった。
+
+https://stackoverflow.com/questions/68733127/how-to-solve-received-response-status-failed-from-custom-resource-message
+
+https://github.com/aws/aws-cdk/issues/24464
+
+# 解決方法
+
+どうやら `ParameterAlreadyExists` というエラーは ssm のエラーらしいので、stack を削除する際に消えていない parameter があると思った。
+そこで、以下のようなコマンドで調べた。
+
+```bash:ssmのparameterを一覧表示する
+aws ssm get-parameters-by-path --path '/' --recursive
+```
+
+そうすると、version を管理していると思われる aws-cdk のパラメータの他に、なんだか見覚えのない parameter があったので以下のコマンドで削除した。
+
+```bash:特定のparameterを削除する
+aws ssm delete-parameter --name キー
+```
+
+その後、`npx cdk deploy --all` などするとうまくいった。ネット上に情報がなかったので、同じように悩んでいる人の助けになれば幸いです。
+
+# 参考
+
+https://atsum.in/aws/aws-cli-parameter-store/

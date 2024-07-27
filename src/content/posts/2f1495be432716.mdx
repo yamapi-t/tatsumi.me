@@ -1,0 +1,381 @@
+---
+title: "「フロントエンドのテスト手法まとめ」をなぞる"
+emoji: "🙄"
+type: "tech"
+tags:
+  - "Next.js"
+  - "TypeScript"
+published: true
+published_at: "2022-12-15 19:44"
+---
+
+# はじめに
+
+この記事は qiita から移行したものです。
+
+勉強として以下の記事をなぞったので記事にしました。ところどころ自己流にアレンジしています。
+
+https://qiita.com/KNR109/items/7cf6b24bed318dab5715
+
+# 環境構築
+
+環境構築が元記事と違います。
+以下では、[Next.js の公式のセットアップ](https://nextjs.org/docs/testing)と[React-Testing-Library 公式の userEvent のセットアップの記事](https://testing-library.com/docs/user-event/install)を参考にしています。
+
+```bash:環境構築
+# 現在のディレクトリに「test-turorial」という名前でnext.jsアプリを作成
+npx create-next-app --ts --use-npm test-tutorial
+
+# いま作ったディレクトリに移動
+cd test-tutorial
+
+# 今回使うライブラリをインストール
+npm i jest jest-environment-jsdom @testing-library/react @testing-library/jest-dom　@testing-library/user-event　msw axios
+```
+
+さらに、プロジェクトルートに jest.config.js を作成して以下をコピペします。
+
+```js:jest.confing.js
+const nextJest = require('next/jest')
+
+const createJestConfig = nextJest({
+  // テスト環境のnext.config.jsと.envファイルを読み込むために、Next.jsアプリのパスを指定します
+  dir: './',
+})
+
+// jestに渡されるカスタム設定を追加します
+const customJestConfig = {
+  // 各テストが走る前の設定を追加します
+  // setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
+  // TypeScriptでbaseUrlをルートディレクトリに設定している場合、aliasを動作させるためには以下のようにする必要があります。
+  moduleDirectories: ['node_modules', '<rootDir>/'],
+  testEnvironment: 'jest-environment-jsdom',
+}
+
+// createJestConfigは、next/jestが非同期でNext.jsの設定を読み込めるようにするために、このようにエクスポートされます。
+module.exports = createJestConfig(customJestConfig)
+```
+
+package.json に npm script を追加します。
+これにより、「npm run test」でテストが実行できます。
+
+```diff:package.json
+...
+
+"scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
++   "test": "jest --verbose"
+  },
+
+...
+```
+
+# テスト
+
+## コンポーネントのレンダリングテスト
+
+```tsx:pages/index.tsx
+import type { NextPage } from "next";
+
+const Home: NextPage = () => {
+  return <div>Hello World</div>;
+};
+export default Home;
+```
+
+```tsx:__tests__/index.test.tsx
+import { render, screen } from "@testing-library/react";
+import Home from "../pages";
+import "@testing-library/jest-dom/extend-expect";
+
+describe("レンダリングテスト", () => {
+  it("画面にHello Worldが表示されていること", () => {
+    render(<Home />);
+    expect(screen.getByText("Hello World")).toBeInTheDocument();
+  });
+});
+```
+
+## ユーザーイベントのテスト
+
+```tsx:components/searchForm.tsx
+import React, { useState } from "react";
+
+export const SearchForm = (): JSX.Element => {
+  const [value, setValue] = useState<string>("");
+  const onchange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setValue(e.target.value);
+  };
+
+  const onClick = () => {
+    // 検索の処理
+  };
+  return (
+    <div>
+      <input type="text" onChange={onchange} value={value} />
+      <button onClick={onClick}>検索</button>
+    </div>
+  );
+};
+```
+
+```tsx:__tests__/searchForm.test_tsx
+import { render, screen } from "@testing-library/react";
+import { SearchForm } from "../components/searchForm";
+import userEvent from "@testing-library/user-event";
+import "@testing-library/jest-dom/extend-expect";
+
+describe("ユーザーイベントのテスト", () => {
+  it("フォームに値を入力したときにフォームの値が入力した値になっていること", async () => {
+    render(<SearchForm />);
+    const inputForm = screen.getByRole("textbox") as HTMLInputElement;
+    // userEvent.typeは返り値がPromise型なのでawaitをつける
+    await userEvent.type(inputForm, "test");
+    expect(inputForm.value).toBe("test");
+  });
+});
+```
+
+## props でのデータ受け取りのテスト
+
+```tsx:components/cards.tsx
+type User = {
+  id: number;
+  name: string;
+};
+
+export const Cards = ({ userInfos }: { userInfos: User[] }): JSX.Element => {
+  return (
+    <>
+      {userInfos.length === 0 ? (
+        <p>ユーザー情報は0です</p>
+      ) : (
+        <ul>
+          {userInfos.map((userInfo) => {
+            return (
+              <li key={userInfo.id}>
+                id:{userInfo.id} name:{userInfo.name}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </>
+  );
+};
+```
+
+```tsx:__tests__/cards.tsx
+import { render, screen } from "@testing-library/react";
+import { Cards } from "../components/Cards";
+import "@testing-library/jest-dom/extend-expect";
+
+describe("propsでのデータ受け取りのテスト", () => {
+  it("空配列を渡したときに、「ユーザー情報は0です」と表示されること", () => {
+    render(<Cards userInfos={[]} />);
+    expect(screen.getByText("ユーザー情報は0です")).toBeInTheDocument();
+  });
+
+  it("空でない配列を渡したときに正常に表示されること", () => {
+    const dummyUserInfos = [
+      { id: 1, name: "tom" },
+      { id: 2, name: "mary" },
+      { id: 3, name: "bob" },
+    ];
+    render(<Cards userInfos={dummyUserInfos} />);
+
+    const userInfos = screen
+      .getAllByRole("listitem")
+      .map((item) => item.textContent);
+    const dummyItems = dummyUserInfos.map(
+      (item) => `id:${item.id} name:${item.name}`
+    );
+
+    expect(userInfos).toEqual(dummyItems);
+  });
+});
+
+```
+
+## useEffect のテスト
+
+```tsx:pages/blog.tsx
+import axios from "axios";
+import { NextPage } from "next";
+import { useEffect, useState } from "react";
+
+type Post = {
+  userId: number;
+  id: number;
+  title: string;
+  body: string;
+};
+
+const BlogPage: NextPage = () => {
+  const [postData, setPostData] = useState<Post>();
+
+  const getPost = async (): Promise<Post> => {
+    const response = await axios.get(
+      "https://jsonplaceholder.typicode.com/posts/1"
+    );
+
+    return response.data;
+  };
+
+  useEffect(() => {
+    try {
+      const getData = async () => {
+        const result = await getPost();
+        setPostData(result);
+      };
+      getData();
+    } catch (e: unknown) {
+      console.log(e);
+    }
+  }, []);
+
+  return (
+    <div>
+      {!postData ? (
+        <p>ローディング中</p>
+      ) : (
+        <p>
+          記事ID{postData.id}:{postData.title}
+        </p>
+      )}
+    </div>
+  );
+};
+
+export default BlogPage;
+```
+
+```tsx:__tests__/blog.test.tsx
+import { render, screen } from "@testing-library/react";
+import BlogPage from "../pages/blog";
+import "@testing-library/jest-dom/extend-expect";
+
+describe("useEffectのテスト", () => {
+  it("データ取得完了前には「ローディング中」と表示されていること", () => {
+    render(<BlogPage />);
+    expect(screen.getByText("ローディング中")).toBeInTheDocument();
+  });
+
+  it("データ取得完了後は「記事ID」を含むテキストが表示されていること", async () => {
+    render(<BlogPage />);
+    expect(await screen.findByText(/記事ID/)).toBeInTheDocument();
+  });
+});
+```
+
+## API のテスト
+
+```tsx:pages/user.tsx
+import axios from "axios";
+import { NextPage } from "next";
+import { useState } from "react";
+
+type User = {
+  id: number;
+  name: string;
+  username: string;
+  email: string;
+};
+const UserPage: NextPage = () => {
+  const [user, setUser] = useState<User>();
+  const [error, setError] = useState<string>("");
+
+  const getUser = async () => {
+    try {
+      const response = await axios.get(
+        "https://jsonplaceholder.typicode.com/users/1"
+      );
+      const { id, name, username, email } = response.data;
+      const userInfo = {
+        id,
+        name,
+        username,
+        email,
+      };
+      setUser(userInfo);
+    } catch (e: unknown) {
+      setError("Request failed.");
+    }
+  };
+
+  return (
+    <div>
+      {!user && !error && (
+        <>
+          <p>データはありません</p>
+          <button onClick={getUser}>ユーザー情報を取得</button>
+        </>
+      )}
+      {user && <h3>名前: {user.name}</h3>}
+      {error && <p data-testid="error">{error}</p>}
+    </div>
+  );
+};
+
+export default UserPage;
+```
+
+```tsx:__tests__/user.test.tsx
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { rest } from "msw";
+import { setupServer } from "msw/node";
+import UserPage from "../pages/user";
+
+const server = setupServer(
+  rest.get("https://jsonplaceholder.typicode.com/users/1", (_req, res, ctx) => {
+    return res(
+      ctx.status(200),
+      ctx.json({
+        id: 1,
+        name: "Leanne Graham dummy",
+        username: "Bret dummy",
+        email: "Sincere@april.biz.dummy",
+      })
+    );
+  })
+);
+
+beforeAll(() => server.listen());
+afterEach(() => {
+  server.resetHandlers();
+});
+afterAll(() => server.close());
+
+describe("APIのテスト", () => {
+  it("データを取得できた際に正常に表示されること", async () => {
+    render(<UserPage />);
+    await userEvent.click(screen.getByRole("button"));
+    expect((await screen.findByRole("heading")).textContent).toEqual(
+      "名前: Leanne Graham dummy"
+    );
+  });
+
+  it("データを取得できなかった際に「Request failed.」と表示されること", async () => {
+    server.use(
+      rest.get(
+        "https://jsonplaceholder.typicode.com/users/1",
+        (_req, res, ctx) => {
+          return res.once(ctx.status(404), ctx.json({ message: "error" }));
+        }
+      )
+    );
+
+    render(<UserPage />);
+    await userEvent.click(screen.getByRole("button"));
+    expect((await screen.findByTestId("error")).textContent).toEqual(
+      "Request failed."
+    );
+    expect(screen.queryByRole("heading")).toBeNull();
+  });
+});
+
+```

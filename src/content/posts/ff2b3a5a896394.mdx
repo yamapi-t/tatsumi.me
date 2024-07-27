@@ -1,0 +1,254 @@
+---
+title: "aws-cdkでlambdaにコンテナをデプロイするCIを作る"
+emoji: "💡"
+type: "tech"
+tags:
+  - "AWS"
+  - "TypeScript"
+published: true
+published_at: "2023-06-09 10:39"
+---
+
+# 初期設定など
+
+以下の記事を参照してください
+
+https://tatsumiyamamoto.com/articles/26f8b7bfea6243
+
+# 作るもの
+
+以下のような CI を作ります
+
+1. github に push
+2. codebuild のマネコンの「ビルド開始」を押す(もしくは aws コマンドから起動する)
+3. codebuild が github の特定のリポジトリの main ブランチを参照し、Dockerfile がビルドされ、イメージが ECR に置かれ、lambda にデプロイされる
+
+![構成図](/images/compressed-images/codebuild-ecr-lambda.png)
+
+# lambda にデプロイするイメージの作成
+
+lambdan にデプロイしたいイメージを作っていきます
+
+```python:src/app.py
+import sys
+
+
+def handler(event, context) -> str:
+    return "Hello from AWS Lambda using Python" + sys.version + "!"
+```
+
+```dockerfile:src/Dockerfile
+FROM public.ecr.aws/lambda/python:3.10
+
+COPY requirements.txt ./
+
+RUN pip3 install -r requirements.txt --target "${LAMBDA_TASK_ROOT}"
+
+COPY app.py ${LAMBDA_TASK_ROOT}
+
+CMD ["app.handler"]
+```
+
+# コンテナの動作テスト
+
+以下のようなコマンドを実行します
+
+```bash:ローカルでdockerのテスト
+docker build . -t test
+docker run --rm -it -p 9000:8000 test
+```
+
+localhost の 9000 番ポートの以下のエンドポイントに対してリクエストを送ることで、ローカルでの lambda の実行テストができます
+
+```bash:ローカルでlambdaの実行テスト
+curl -X POST http://localhost:9000/2015-03-31/functions/function/invocations -d {} # lambdaの呼び出し
+```
+
+https://docs.aws.amazon.com/ja_jp/lambda/latest/dg/images-test.html
+
+# aws-cdk のコード
+
+ざっと、こんな感じになったというのを書いてみます
+aws-cdk のベストプラクティス的なものを知らないので、よりいいやり方があれば教えてください
+
+```typescript:cdk/libs/ecr-stack.ts
+import {
+  App,
+  Duration,
+  RemovalPolicy,
+  Stack,
+  StackProps,
+  aws_codebuild,
+  aws_ecr,
+  aws_iam,
+  aws_lambda,
+} from 'aws-cdk-lib';
+import 'dotenv/config'; # 環境変数の読み込み
+
+const REGION = process.env.AWS_DEFAULT_REGION ?? '';
+const ACCOUNT_ID = process.env.AWS_ACCOUNT_ID ?? '';
+const OWNER = process.env.GITHUB_OWNER ?? '';
+const REPO = process.env.GITHUB_REPO ?? '';
+const BRANCH = process.env.GITHUB_BRANCH ?? '';
+
+export class EcrStack extends Stack {
+  constructor(scope: App, id: string, props?: StackProps) {
+    super(scope, id, props);
+
+    const ecr = new aws_ecr.Repository(this, 'ZennCdkRepository', {
+      repositoryName: 'zenn-cdk-repository',
+      removalPolicy: RemovalPolicy.DESTROY, // スタック削除時(npx cdk destroy実行時)にrepositoryも削除
+      autoDeleteImages: true, // repository削除時にcontainer imageも削除
+    });
+
+    // buildSpecをjsのオブジェクト形式で記述する
+    const buildSpec = {
+      version: '0.2',
+      phases: {
+        pre_build: {
+          commands: [
+            'echo "Logging in to Amazon ECR..."',
+            'aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com',
+          ],
+        },
+        build: {
+          commands: [
+            'echo "Building the Docker image..."',
+            'docker build -t $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/zenn-cdk-repository:latest -f cdk-ecr-lambda/src/Dockerfile cdk-ecr-lambda/src',
+          ],
+        },
+        post_build: {
+          commands: [
+            'echo "Pushing the Docker image..."',
+            'docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/zenn-cdk-repository:latest',
+            // lambdaはecrにimageがないと失敗するので、初回はコメントアウトなどして対応する
+            // なにかいい方法があれば教えてください
+            'aws lambda update-function-code --function-name zenn-cdk-lambda --image $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/zenn-cdk-repository:latest',
+          ],
+        },
+      },
+    };
+
+    const codebuildRole = new aws_iam.Role(this, 'ZennCdkCodebuildRole', {
+      roleName: 'zenn-cdk-codebuild-role',
+      assumedBy: new aws_iam.ServicePrincipal('codebuild.amazonaws.com'),
+    });
+
+    // ecrへのアクセス権限をcodebuildに付与
+    codebuildRole.addManagedPolicy(
+      aws_iam.ManagedPolicy.fromAwsManagedPolicyName(
+        'AmazonEC2ContainerRegistryPowerUser',
+      ),
+    );
+
+    // lambdaのupdate権限をcodebuildに付与(めんどいのでフルアクセスをつけている)
+    codebuildRole.addManagedPolicy(
+      aws_iam.ManagedPolicy.fromAwsManagedPolicyName('AWSLambda_FullAccess'),
+    );
+
+    const codebuild = new aws_codebuild.Project(this, 'ZennCdkCodebuild', {
+      projectName: 'zenn-cdk-codebuild',
+      source: aws_codebuild.Source.gitHub({
+        owner: OWNER,
+        repo: REPO,
+        branchOrRef: BRANCH,
+        webhook: false, // GitHubからのWebhookを無効化
+      }),
+      buildSpec: aws_codebuild.BuildSpec.fromObject(buildSpec),
+      environment: {
+        privileged: true, // dockerを動かすのでsudo権限を付与
+        buildImage: aws_codebuild.LinuxBuildImage.STANDARD_7_0, // Dockerfileをどのイメージ上でビルドするか
+        environmentVariables: {
+          AWS_ACCOUNT_ID: {
+            type: aws_codebuild.BuildEnvironmentVariableType.PLAINTEXT,
+            value: ACCOUNT_ID,
+          },
+          AWS_DEFAULT_REGION: {
+            type: aws_codebuild.BuildEnvironmentVariableType.PLAINTEXT,
+            value: REGION,
+          },
+        },
+      },
+      role: codebuildRole,
+      cache: aws_codebuild.Cache.local(
+        aws_codebuild.LocalCacheMode.DOCKER_LAYER,
+      ),
+    });
+
+    // lambdaはecrにimageがないと失敗するので、初回はコメントアウトなどして対応する(なにかいい方法があれば知りたい...)
+    const lambda = new aws_lambda.Function(this, 'ZennCdkLambda', {
+      functionName: 'zenn-cdk-lambda',
+      code: aws_lambda.Code.fromEcrImage(ecr, {
+        cmd: ['app.handler'],
+        tagOrDigest: 'latest',
+      }),
+      runtime: aws_lambda.Runtime.FROM_IMAGE,
+      handler: aws_lambda.Handler.FROM_IMAGE,
+      timeout: Duration.seconds(3),
+    });
+  }
+}
+```
+
+# ECR にイメージがないと lambda のデプロイが失敗する
+
+初回は ECR に何もイメージないので、lambda をデプロイする際に「イメージないやんけ！」みたいなエラーが発生します。
+イメージがあったらそっち、なかったらデフォルトのイメージ？みたいな切り替えができればなあと思っています(やり方知っている方いれば教えてほしいです)
+
+```ts:lambdaのデプロイが失敗する
+// lambdaはecrにimageがないと失敗するので、初回はコメントアウトなどして対応する(なにかいい方法があれば知りたい...)
+const lambda = new aws_lambda.Function(this, "ZennCdkLambda", {
+  functionName: "zenn-cdk-lambda",
+  code: aws_lambda.Code.fromEcrImage(ecr, {
+    cmd: ["app.handler"],
+    tagOrDigest: "latest",
+  }),
+  runtime: aws_lambda.Runtime.FROM_IMAGE,
+  handler: aws_lambda.Handler.FROM_IMAGE,
+  timeout: Duration.seconds(3),
+});
+```
+
+# aws-cdk における環境変数の扱いについて
+
+以下の記事が参考になります
+
+https://maku.blog/p/vx5ta85/
+
+多分上のコードは環境変数的にいいやり方ではないのですが、学習用のコードだったのでまあいっかと...
+
+# github との連携には以下の手順が必要
+
+github と codebuild の連携には以下の手順が事前に必要です
+github から token を発行し以下のコマンドを実行します
+
+```bash:codebuildの初回設定
+aws codebuild import-source-credentials --server-type GITHUB --auth-type PERSONAL_ACCESS_TOKEN --token <token_value>
+```
+
+https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_codebuild-readme.html
+
+# デプロイ
+
+```bash:デプロイ
+npx cdk deploy # lambdaが初回イメージがないとエラーになるので注意
+git add -A
+git commit -m 'aws-cdkのテストをする　'
+git push
+```
+
+# codebuild のビルドを開始する
+
+マネコンから「ビルド開始」を押すか、以下のコマンドを実行します
+
+```bash:ビルド開始コマンド
+aws codebuild start-build --project-name zenn-cdk-codebuild
+```
+
+codebuild が成功したら lambda のテストをして終了です
+
+# お片付け
+
+```bash:stuckを削除する
+npx cdk destroy
+```

@@ -1,0 +1,90 @@
+---
+title: "tsの配列に対して、条件に応じてpushしたい"
+emoji: "😎"
+type: "tech"
+tags:
+  - "JavaScript"
+  - "TypeScript"
+published: true
+published_at: "2023-03-14 11:56"
+---
+
+# 元ツイ
+
+https://twitter.com/t__keshi/status/1635267214008897537?s=20
+
+# 1. 普通に if で分岐
+
+```ts:ifで分岐
+type Apartment = {
+  metersToStation: number;
+  ageOfBuilding: number;
+  options: string[];
+};
+
+const apartment: Apartment = {
+  metersToStation: 400,
+  ageOfBuilding: 5,
+  options: ["ShoeLocker", "AutoLock"],
+};
+
+const salesPoints1: string[] = [];
+if (apartment.metersToStation < 1000) {
+  salesPoints1.push("駅近");
+}
+if (apartment.ageOfBuilding < 5) {
+  salesPoints1.push("築浅");
+}
+if (apartment.options.includes("AutoLock")) {
+  salesPoints1.push("セキュリティ充実");
+}
+```
+
+# 2. 短絡評価と filter と型ガード
+
+```ts:短絡評価とfilterと型ガード
+type Apartment = {
+  metersToStation: number;
+  ageOfBuilding: number;
+  options: string[];
+};
+
+const apartment: Apartment = {
+  metersToStation: 400,
+  ageOfBuilding: 5,
+  options: ["ShoeLocker", "AutoLock"],
+};
+
+const salesPoints2: string[] = [
+  apartment.metersToStation < 1000 && "駅近",
+  apartment.metersToStation < 5 && "築浅",
+  apartment.options.includes("AutoLock") && "セキュリティ充実",
+].filter<string>((point): point is string => typeof point === "string");
+```
+
+# 3. ジェネレーター
+
+```ts:ジェネレーター
+type Apartment = {
+  metersToStation: number;
+  ageOfBuilding: number;
+  options: string[];
+};
+
+const apartment: Apartment = {
+  metersToStation: 400,
+  ageOfBuilding: 5,
+  options: ["ShoeLocker", "AutoLock"],
+};
+
+function* makeSalesPoint(apartment: Apartment) {
+  if (apartment.metersToStation < 1000) yield "駅近";
+  if (apartment.ageOfBuilding < 5) yield "築浅";
+  if (apartment.options.includes("AutoLock")) yield "セキュリティ充実";
+}
+const salesPoints3: string[] = [...makeSalesPoint(apartment)];
+```
+
+# 全体コード
+
+https://www.typescriptlang.org/play?#code/C4TwDgpgBAgmCGAnYBbCA7YUC8UDeAUFFGsBIgM4AqA9gMrDzACWN6AXFOgK4oBG5ANxEo8AOYQA8gDMAQt2YAbACbN0Yzj35CRNMCzYVOFYIjViA2gF1hAX2EEAxoazwEyNJk5wkqDFlxCYlJyanpGAw4oABYABliAGhFxKTkFFXNOAFYk4j1IoygLACI6AAsaCAAZGkcAa3JihKhimG5gGhr64qsk+wInFygKeEUICgAFGjVgCgBGY1NzaxwimwJmaSgACjdfT2AAOhDKWgYmVnQoAB4oOfjYgEp8ERGxyenMecOwbgoy7bFQCjmYBF+OKjzsGy2u3cfkwhxSMnkSlU6huUCyzyCw1G4ymM2+v3+gMAk96AUVtwZDNjs9h5-Id8pcKIc1I5FNxlONAW0Ol06uCsa9cR8CXMfn8AcVAN0MgFqGQCnDIArhkAYwyAYoZAKKKgHztSkEWwDZzoEw4974r4AJkWZnUK1wFmSsIOxwgZFO4QubHR93iUAAZN6WqCmnb9vSTmFzpF0VkfX7iuTA8RaXCjozDCz0GyOVzWu1OrV+c9fS1ZYrVZrA1ZDtIlM7riZLWIAHzbbZgT7AR6cVszKDMCjDJZo7ANqCgSA0LZdzA4bC4Yp18zagjSbjpyIAKhI8AadGFJuAMODXlg9v8guI1IPdPhobOEUuHoezxAzAgKn9YOE5+hiYdiLSKPMSMnxfN9YwpT8e2-E94RTA00wzTkKG5HM+QFKBn1fZQi3lZV1S1SF9UNN48TbCgAGYLWWKxVgsQ46JQLcIB3Y020vJNHnWQYDRoMZDkUGgxG2YiRS+OYIS4igeIgPiBKE3dSNNcTCKkmTBOEvdyIhIA

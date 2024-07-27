@@ -1,0 +1,38 @@
+---
+import type { CollectionEntry } from "astro:content";
+
+type Props = {
+  post: CollectionEntry<"posts">;
+};
+
+const { post } = Astro.props;
+---
+
+<article
+  class="rounded-xl h-full p-4 border-2 dark:border-neutral-700 border-neutral-200"
+>
+  <div class="mb-2">
+    <p class="text-sm mb-1">
+      {post.data.published_at}
+    </p>
+
+    <a href={`/posts/${encodeURIComponent(post.slug)}`} class="hover:underline">
+      <h3 class="font-semibold text-xl">{post.data.title}</h3>
+    </a>
+  </div>
+
+  <div class="flex flex-wrap gap-2 mt-4">
+    {
+      post.data.tags.map((tag) => {
+        return (
+          <a
+            href={`/tags/${encodeURIComponent(tag)}`}
+            class="bg-neutral-100 dark:bg-neutral-600 text-neutral-900 dark:text-neutral-100 px-2 py-1 rounded-full text-xs"
+          >
+            {tag}
+          </a>
+        );
+      })
+    }
+  </div>
+</article>
