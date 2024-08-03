@@ -8,14 +8,14 @@ import sitemap from "@astrojs/sitemap";
 
 // https://astro.build/config
 export default defineConfig({
-  site: "https://tatsumiyamamoto.com",
-  integrations: [mdx(), tailwind(), sitemap()],
-  markdown: {
-    remarkPlugins: [remarkCodeTitles, remarkLinkCard],
-    shikiConfig: {
-      theme: "github-dark-dimmed",
-      wrap: false,
-    },
-  },
-  prefetch: true,
+	site: "https://tatsumime-tatsumiyamamotos-projects.vercel.app/",
+	integrations: [mdx(), tailwind(), sitemap()],
+	markdown: {
+		remarkPlugins: [remarkCodeTitles, remarkLinkCard],
+		shikiConfig: {
+			theme: "github-dark-dimmed",
+			wrap: false,
+		},
+	},
+	prefetch: true,
 });
