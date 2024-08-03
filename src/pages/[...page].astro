@@ -1,0 +1,42 @@
+---
+import type { GetStaticPaths } from "astro";
+import { getCollection } from "astro:content";
+import BaseLayout from "../layouts/BaseLayout.astro";
+import ArticleCard from "../components/ArticleCard.astro";
+import Pagination from "../components/Pagination.astro";
+
+export const getStaticPaths = (async ({ paginate }) => {
+  const posts = (await getCollection("posts")).sort((a, b) => {
+    return (
+      new Date(b.data.published_at).getTime() -
+      new Date(a.data.published_at).getTime()
+    );
+  });
+
+  const pages = posts.map((post) => {
+    return {
+      params: { slug: post.slug },
+      props: { post },
+    };
+  });
+
+  return paginate(pages, { pageSize: 5 });
+}) satisfies GetStaticPaths;
+
+const { page } = Astro.props;
+---
+
+<BaseLayout title="ホーム">
+  <h2 class="font-semibold text-xl my-4">記事一覧</h2>
+  <Pagination prevUrl={page.url.prev} nextUrl={page.url.next} />
+
+  <div class="grid grid-cols-1 gap-4">
+    {
+      page.data.map(({ props }) => {
+        return <ArticleCard post={props.post} />;
+      })
+    }
+  </div>
+
+  <Pagination prevUrl={page.url.prev} nextUrl={page.url.next} />
+</BaseLayout>
